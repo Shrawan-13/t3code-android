@@ -16,7 +16,7 @@ not need a JS runtime.
 
 Download the latest debug APK:
 
-**[t3code-android-debug.apk (v0.2.0)](https://github.com/Shrawan-13/t3code-android/releases/download/v0.2.0-android/t3code-android-debug.apk)**
+**[Download the latest t3code-android-debug.apk](https://github.com/Shrawan-13/t3code-android/releases/latest/download/t3code-android-debug.apk)**
 
 Requires Android 8.0+ on an arm64 device. The APK is debug-signed and packages
 only `arm64-v8a`. You also need a reachable T3 environment plus an access token
