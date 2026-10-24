@@ -49,6 +49,9 @@ fun ProjectsScreen(state: UiState, viewModel: MainViewModel) {
             ScreenHeader(
                 title = "Projects",
                 subtitle = subtitle,
+                leading = {
+                    BackButton { viewModel.selectTab(AppTab.Threads) }
+                },
                 actions = {
                     IconButton(onClick = { viewModel.openNewThread() }) {
                         Icon(Icons.Rounded.Add, contentDescription = "New thread")

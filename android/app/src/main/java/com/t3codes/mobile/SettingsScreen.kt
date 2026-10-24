@@ -1,6 +1,7 @@
 package com.t3codes.mobile
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,10 +17,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.Palette
@@ -59,14 +62,67 @@ fun SettingsScreen(state: UiState, viewModel: MainViewModel) {
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 120.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 36.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
             ScreenHeader(
                 title = "Settings",
                 subtitle = environment.label.ifBlank { "Connected environment" },
+                leading = {
+                    BackButton { viewModel.selectTab(AppTab.Threads) }
+                },
             )
+        }
+
+        item {
+            GroupedCard {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    StatusDot(StatusTone.Active, pulsing = true, size = 9.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = environment.label.ifBlank { "Connected environment" },
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(
+                            text = state.baseUrl,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Pill(
+                        text = "Online",
+                        container = MaterialTheme.colorScheme.tertiaryContainer,
+                        content = MaterialTheme.colorScheme.onTertiaryContainer,
+                    )
+                }
+            }
+        }
+
+        item { SectionLabel("Workspace") }
+        item {
+            GroupedCard {
+                SettingsRow(
+                    icon = Icons.Rounded.FolderOpen,
+                    title = "Projects",
+                    subtitle = "${state.projects.size} project${if (state.projects.size == 1) "" else "s"}",
+                    onClick = { viewModel.selectTab(AppTab.Projects) },
+                )
+                InsetDivider(start = 58.dp)
+                SettingsRow(
+                    icon = Icons.Rounded.BarChart,
+                    title = "Usage",
+                    subtitle = "Tokens, cost, and model activity",
+                    onClick = { viewModel.selectTab(AppTab.Usage) },
+                )
+            }
         }
 
         item { SectionLabel("Connection") }
@@ -234,7 +290,7 @@ fun SettingsScreen(state: UiState, viewModel: MainViewModel) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "T3 Code for Android 0.2.0",
+                        text = "T3 Code for Android ${BuildConfig.VERSION_NAME}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
@@ -316,10 +372,14 @@ private fun SettingsRow(
     title: String,
     subtitle: String,
     monospace: Boolean = false,
+    onClick: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(

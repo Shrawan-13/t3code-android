@@ -44,6 +44,126 @@ data class TimelineEntry(
     val attachmentCount: Int = 0,
 )
 
+/**
+ * A rendered block in the feed. Consecutive low-level work items collapse into
+ * one [WorkGroup]; conversation turns stay as [Single] items.
+ */
+sealed interface TimelineBlock {
+    val key: String
+
+    data class Single(val entry: TimelineEntry) : TimelineBlock {
+        override val key: String get() = entry.key
+    }
+
+    data class WorkGroup(
+        override val key: String,
+        val entries: List<TimelineEntry>,
+    ) : TimelineBlock
+}
+
+private val workEntryKinds = setOf(
+    TimelineKind.Reasoning,
+    TimelineKind.Command,
+    TimelineKind.FileChange,
+    TimelineKind.Tool,
+)
+
+fun groupTimeline(entries: List<TimelineEntry>): List<TimelineBlock> {
+    val blocks = mutableListOf<TimelineBlock>()
+    val work = mutableListOf<TimelineEntry>()
+    fun flushWork() {
+        if (work.isEmpty()) return
+        if (work.size == 1) {
+            blocks += TimelineBlock.Single(work.first())
+        } else {
+            blocks += TimelineBlock.WorkGroup(
+                key = "work-${work.first().key}",
+                entries = work.toList(),
+            )
+        }
+        work.clear()
+    }
+    entries.forEach { entry ->
+        if (entry.kind in workEntryKinds) {
+            work += entry
+        } else {
+            flushWork()
+            blocks += TimelineBlock.Single(entry)
+        }
+    }
+    flushWork()
+    return blocks
+}
+
+enum class WorkAction { Thought, Read, Search, Command, Edit, Browse, Tool }
+
+fun workAction(entry: TimelineEntry): WorkAction = when (entry.kind) {
+    TimelineKind.Reasoning -> WorkAction.Thought
+    TimelineKind.Command -> WorkAction.Command
+    TimelineKind.FileChange -> WorkAction.Edit
+    else -> {
+        val name = "${entry.item.toolName} ${entry.text} ${entry.secondary}".lowercase(Locale.US)
+        when {
+            listOf("read", "open_file", "view_file", "cat ").any { name.contains(it) } -> WorkAction.Read
+            listOf("search", "grep", "find", "glob", "list_dir", "code_search")
+                .any { name.contains(it) } -> WorkAction.Search
+            listOf("fetch", "browser", "web", "http", "url").any { name.contains(it) } ->
+                WorkAction.Browse
+            listOf("edit", "write", "patch", "apply", "replace").any { name.contains(it) } ->
+                WorkAction.Edit
+            else -> WorkAction.Tool
+        }
+    }
+}
+
+fun workGroupSummary(entries: List<TimelineEntry>): String {
+    val counts = entries.groupingBy(::workAction).eachCount()
+    val parts = buildList {
+        if (counts[WorkAction.Thought] != null) add("Thought")
+        counts[WorkAction.Read]?.let { add("Read $it file${if (it == 1) "" else "s"}") }
+        counts[WorkAction.Search]?.let { add("Searched $it time${if (it == 1) "" else "s"}") }
+        counts[WorkAction.Command]?.let { add("Ran $it command${if (it == 1) "" else "s"}") }
+        counts[WorkAction.Edit]?.let { add("Changed $it file${if (it == 1) "" else "s"}") }
+        counts[WorkAction.Browse]?.let { add("Browsed $it page${if (it == 1) "" else "s"}") }
+        counts[WorkAction.Tool]?.let { add("Used $it tool${if (it == 1) "" else "s"}") }
+    }
+    if (parts.isEmpty()) return "Work"
+    val headline = upperFirst(parts.first())
+    return when (parts.size) {
+        1 -> headline
+        2 -> "$headline and ${lowerFirst(parts[1])}"
+        else -> buildString {
+            append(headline)
+            append(", ")
+            append(parts.drop(1).dropLast(1).joinToString(", ") { lowerFirst(it) })
+            append(" and ")
+            append(lowerFirst(parts.last()))
+        }
+    }
+}
+
+private fun upperFirst(value: String): String =
+    if (value.isEmpty()) value else value[0].uppercaseChar() + value.substring(1)
+
+private fun lowerFirst(value: String): String =
+    if (value.isEmpty()) value else value[0].lowercaseChar() + value.substring(1)
+
+fun workEntryLabel(entry: TimelineEntry): String = when (entry.kind) {
+    TimelineKind.Reasoning -> if (entry.streaming) "Thinking…" else "Thought"
+    TimelineKind.Command -> {
+        val command = entry.command.lineSequence().firstOrNull().orEmpty().trim()
+        if (command.isBlank()) "Command" else command.take(96)
+    }
+    TimelineKind.FileChange -> {
+        val name = entry.text.substringAfterLast('/').ifBlank { entry.text.ifBlank { "File" } }
+        "Edited $name"
+    }
+    else -> entry.text
+        .replace(Regex("\\s+(?:complete|completed)\\s*$", RegexOption.IGNORE_CASE), "")
+        .trim()
+        .ifBlank { entry.item.toolName.ifBlank { "Tool" } }
+}
+
 fun ThreadProjection.timeline(
     older: List<VisibleTurnItem> = emptyList(),
     pending: List<VisibleTurnItem> = emptyList(),

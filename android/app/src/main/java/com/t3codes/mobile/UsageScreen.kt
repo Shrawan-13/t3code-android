@@ -72,6 +72,9 @@ fun UsageScreen(state: UiState, viewModel: MainViewModel) {
             ScreenHeader(
                 title = "Usage",
                 subtitle = summary?.let { "${it.sinceDay} → ${it.untilDay}" } ?: "Token and cost accounting",
+                leading = {
+                    BackButton { viewModel.selectTab(AppTab.Threads) }
+                },
             )
         }
 

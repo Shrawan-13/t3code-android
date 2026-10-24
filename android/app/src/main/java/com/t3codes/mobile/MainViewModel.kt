@@ -18,6 +18,10 @@ import com.t3codes.core.Model
 import com.t3codes.core.ModelSelection
 import com.t3codes.core.Project
 import com.t3codes.core.ProjectEntry
+import com.t3codes.core.PullRequestEntry
+import com.t3codes.core.PullRequestListResult
+import com.t3codes.core.PullRequestProjectError
+import com.t3codes.core.PullRequestProviderSummary
 import com.t3codes.core.RuntimeRequest
 import com.t3codes.core.ServerConfig
 import com.t3codes.core.ShellFeed
@@ -44,17 +48,22 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.put
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
 
 enum class AppTab(val label: String) {
-    Threads("Threads"),
+    Threads("Chats"),
+    PullRequests("Pull requests"),
     Projects("Projects"),
     Usage("Usage"),
     Settings("Settings"),
 }
+
+val bottomTabs = listOf(AppTab.Threads, AppTab.PullRequests)
 
 data class ThreadUi(
     val threadId: String,
@@ -118,6 +127,16 @@ data class FilesUi(
     val file: FileView? = null,
 )
 
+data class PullRequestsUi(
+    val entries: List<PullRequestEntry> = emptyList(),
+    val errors: List<PullRequestProjectError> = emptyList(),
+    val providers: List<PullRequestProviderSummary> = emptyList(),
+    val loading: Boolean = true,
+    val error: String? = null,
+    val state: String = "open",
+    val loaded: Boolean = false,
+)
+
 data class UiState(
     val baseUrl: String = "http://127.0.0.1:3773",
     val token: String = "",
@@ -133,6 +152,8 @@ data class UiState(
     val projectFilter: String? = null,
     val search: String = "",
     val showArchived: Boolean = false,
+    val homeFilterOpen: Boolean = false,
+    val pullRequests: PullRequestsUi = PullRequestsUi(),
     val activeThreadId: String? = null,
     val thread: ThreadUi? = null,
     val newThreadOpen: Boolean = false,
@@ -171,6 +192,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var diffJob: Job? = null
     private var filesJob: Job? = null
     private var usageJob: Job? = null
+    private var pullRequestsJob: Job? = null
 
     var state by mutableStateOf(
         UiState(
@@ -208,6 +230,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun consumeToast() {
         if (state.toast != null) state = state.copy(toast = null)
+    }
+
+    fun showMessage(message: String) {
+        toast(message)
     }
 
     private fun toast(message: String) {
@@ -255,6 +281,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     archivedThreads = result.second.archivedThreads,
                     projectFilter = null,
                     search = "",
+                    pullRequests = PullRequestsUi(),
                     error = null,
                 )
                 startShellWatch()
@@ -266,6 +293,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     projects = emptyList(),
                     threads = emptyList(),
                     archivedThreads = emptyList(),
+                    pullRequests = PullRequestsUi(),
                     error = describe(error),
                 )
             }
@@ -313,6 +341,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 projectFilter = null,
                 search = "",
                 showArchived = false,
+                homeFilterOpen = false,
+                pullRequests = PullRequestsUi(),
                 error = null,
             )
         }
@@ -375,11 +405,77 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun loadPullRequests(force: Boolean = false, stateFilter: String? = null) {
+        val conn = connection ?: return
+        val current = state.pullRequests
+        val filter = stateFilter ?: current.state
+        if (current.loading && !force && current.loaded) return
+        state = state.copy(
+            pullRequests = current.copy(
+                loading = true,
+                error = null,
+                state = filter,
+            ),
+        )
+        pullRequestsJob?.cancel()
+        pullRequestsJob = viewModelScope.launch {
+            try {
+                val payload = buildJsonObject {
+                    put("state", filter)
+                    put("involvement", "all")
+                    put("limit", 100)
+                }
+                val result = withContext(Dispatchers.IO) {
+                    T3Core.json.decodeFromJsonElement<PullRequestListResult>(
+                        conn.callObject("pullRequests.list", payload),
+                    )
+                }
+                if (state.tab == AppTab.PullRequests || force) {
+                    state = state.copy(
+                        pullRequests = PullRequestsUi(
+                            entries = result.entries,
+                            errors = result.errors,
+                            providers = result.providers,
+                            loading = false,
+                            error = null,
+                            state = filter,
+                            loaded = true,
+                        ),
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                state = state.copy(
+                    pullRequests = state.pullRequests.copy(
+                        loading = false,
+                        error = describe(error),
+                        state = filter,
+                        loaded = true,
+                    ),
+                )
+            }
+        }
+    }
+
+    fun setPullRequestsFilter(stateFilter: String) {
+        if (stateFilter == state.pullRequests.state && state.pullRequests.loaded) return
+        loadPullRequests(force = true, stateFilter = stateFilter)
+    }
+
     // ------------------------------------------------------------------ navigation
 
     fun selectTab(tab: AppTab) {
-        state = state.copy(tab = tab)
-        if (tab == AppTab.Usage) loadUsage(state.usage?.days ?: 30)
+        state = state.copy(tab = tab, homeFilterOpen = false)
+        when (tab) {
+            AppTab.Usage -> loadUsage(state.usage?.days ?: 30)
+            AppTab.PullRequests -> loadPullRequests(force = true)
+            else -> Unit
+        }
+    }
+
+    fun setHomeFilterOpen(open: Boolean) {
+        state = state.copy(homeFilterOpen = open)
     }
 
     fun setProjectFilter(projectId: String?) {
@@ -927,6 +1023,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         title: String,
         selection: ModelSelection,
         initialText: String,
+        workspaceType: String = "root",
     ) {
         if (state.launching) return
         val conn = connection ?: return
@@ -941,7 +1038,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         projectId = projectId,
                         title = resolvedTitle,
                         modelSelection = selection,
-                        workspace = WorkspaceStrategy(type = "root"),
+                        workspace = WorkspaceStrategy(type = workspaceType),
                         initialText = initialText.trim().ifEmpty { null },
                     )
                 }
@@ -1315,6 +1412,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         filesJob = null
         usageJob?.cancel()
         usageJob = null
+        pullRequestsJob?.cancel()
+        pullRequestsJob = null
         connection?.close()
         connection = null
     }

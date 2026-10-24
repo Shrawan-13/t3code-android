@@ -3,6 +3,8 @@ package com.t3codes.mobile
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,8 +35,8 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
@@ -66,6 +68,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -537,7 +541,8 @@ private fun TimelineContent(
     onLoadEarlier: () -> Unit,
 ) {
     val listState = rememberLazyListState()
-    val itemCount = rows.size +
+    val blocks = remember(rows) { groupTimeline(rows) }
+    val itemCount = blocks.size +
         (if (thread.hasMoreHistory) 1 else 0) +
         (if (running) 1 else 0) +
         pullRequests.size
@@ -571,7 +576,7 @@ private fun TimelineContent(
     }
     LaunchedEffect(
         itemCount,
-        rows.lastOrNull()?.key,
+        blocks.lastOrNull()?.key,
         rows.lastOrNull()?.text,
         rows.lastOrNull()?.output,
         running,
@@ -607,17 +612,24 @@ private fun TimelineContent(
         items(pullRequests) { pullRequest ->
             PullRequestCard(pullRequest)
         }
-        items(rows, key = { it.key }) { entry ->
-            when (entry.kind) {
-                TimelineKind.User -> UserBubble(entry)
-                TimelineKind.Assistant -> AssistantMessage(entry)
-                TimelineKind.Reasoning -> ThinkingCard(entry)
-                TimelineKind.Command -> CommandCard(entry)
-                TimelineKind.FileChange -> FileChangeCard(entry)
-                TimelineKind.Tool -> ToolCard(entry)
-                TimelineKind.Notice -> NoticeRow(entry)
-                TimelineKind.Checkpoint -> CheckpointRow(entry)
-                TimelineKind.Unknown -> UnknownCard(entry)
+        items(blocks, key = { it.key }) { block ->
+            when (block) {
+                is TimelineBlock.WorkGroup -> WorkGroupCard(block.entries)
+                is TimelineBlock.Single -> {
+                    val entry = block.entry
+                    when (entry.kind) {
+                        TimelineKind.User -> UserBubble(entry)
+                        TimelineKind.Assistant -> AssistantMessage(entry)
+                        TimelineKind.Reasoning,
+                        TimelineKind.Command,
+                        TimelineKind.FileChange,
+                        TimelineKind.Tool,
+                        -> WorkEntryRow(entry)
+                        TimelineKind.Notice -> NoticeRow(entry)
+                        TimelineKind.Checkpoint -> CheckpointRow(entry)
+                        TimelineKind.Unknown -> UnknownCard(entry)
+                    }
+                }
             }
         }
         if (running) {
@@ -639,15 +651,15 @@ private fun UserBubble(entry: TimelineEntry) {
             Surface(
                 modifier = Modifier.widthIn(max = maxBubble),
                 shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp),
-                color = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             ) {
                 Column(modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp)) {
                     SelectionContainer {
                         Text(
                             text = entry.text,
                             style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onPrimary,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
                     }
                     if (entry.attachmentCount > 0) {
@@ -655,7 +667,7 @@ private fun UserBubble(entry: TimelineEntry) {
                         Text(
                             text = "${entry.attachmentCount} attachment${if (entry.attachmentCount == 1) "" else "s"}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.75f),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
                         )
                     }
                 }
@@ -774,6 +786,7 @@ private fun ComposerColumn(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background)
             .navigationBarsPadding()
             .imePadding(),
     ) {
@@ -882,11 +895,17 @@ private fun Composer(
     val model = summary?.modelSelection?.model?.takeIf { it.isNotBlank() }
 
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 2.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.42f),
+        ),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+        Column(modifier = Modifier.padding(start = 12.dp, end = 8.dp, top = 5.dp, bottom = 8.dp)) {
             if (thread.pendingAttachments.isNotEmpty() || thread.uploading) {
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -920,38 +939,40 @@ private fun Composer(
                 }
             }
 
-            OutlinedTextField(
+            TextField(
                 value = text,
                 onValueChange = { text = it },
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = {
-                    Text(if (running) "Queue a message for T3…" else "Message T3…")
+                    Text(
+                        text = if (running) "Queue a message for T3…" else "Message T3…",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 },
                 minLines = 1,
                 maxLines = 6,
-                shape = RoundedCornerShape(20.dp),
                 textStyle = MaterialTheme.typography.bodyLarge,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
                     imeAction = ImeAction.Default,
                 ),
                 keyboardActions = KeyboardActions(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Transparent,
-                    unfocusedBorderColor = Color.Transparent,
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
                 ),
             )
 
-            Spacer(Modifier.height(7.dp))
+            Spacer(Modifier.height(2.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onPickAttachment, enabled = !thread.uploading) {
                     Icon(
-                        Icons.Rounded.AttachFile,
+                        Icons.Rounded.Add,
                         contentDescription = "Attach file",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

@@ -1,20 +1,24 @@
 package com.t3codes.mobile
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.BarChart
-import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.CallMerge
+import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.Forum
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -45,32 +49,38 @@ fun T3App(viewModel: MainViewModel) {
         }
     }
 
-    BackHandler(enabled = state.terminal != null) { viewModel.closeTerminal() }
-    BackHandler(enabled = state.terminal == null && state.diff != null) { viewModel.closeDiff() }
+    BackHandler(enabled = state.newThreadOpen) { viewModel.closeNewThread() }
+    BackHandler(enabled = !state.newThreadOpen && state.terminal != null) { viewModel.closeTerminal() }
     BackHandler(
-        enabled = state.terminal == null && state.diff == null &&
+        enabled = !state.newThreadOpen && state.terminal == null && state.diff != null,
+    ) { viewModel.closeDiff() }
+    BackHandler(
+        enabled = !state.newThreadOpen && state.terminal == null && state.diff == null &&
             state.files?.file != null,
     ) { viewModel.closeFile() }
     BackHandler(
-        enabled = state.terminal == null && state.diff == null &&
+        enabled = !state.newThreadOpen && state.terminal == null && state.diff == null &&
             state.files != null && state.files.file == null,
     ) { viewModel.closeFiles() }
     BackHandler(
-        enabled = state.terminal == null && state.diff == null && state.files == null &&
-            state.activeThreadId != null,
+        enabled = !state.newThreadOpen && state.terminal == null && state.diff == null &&
+            state.files == null && state.activeThreadId != null,
     ) { viewModel.closeThread() }
     BackHandler(
-        enabled = state.terminal == null &&
+        enabled = !state.newThreadOpen &&
+            state.terminal == null &&
             state.diff == null &&
             state.files == null &&
             state.activeThreadId == null &&
             state.connected &&
-            state.tab != AppTab.Threads,
+            state.tab != AppTab.Threads &&
+            state.tab !in bottomTabs,
     ) { viewModel.selectTab(AppTab.Threads) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         when {
             !state.connected -> ConnectScreen(state, viewModel)
+            state.newThreadOpen -> NewThreadScreen(state, viewModel)
             state.terminal != null -> TerminalScreen(state, viewModel)
             state.diff != null -> DiffScreen(state, viewModel)
             state.files != null -> FilesScreen(state, viewModel)
@@ -84,10 +94,6 @@ fun T3App(viewModel: MainViewModel) {
                 .padding(horizontal = 16.dp, vertical = 96.dp),
         )
     }
-
-    if (state.newThreadOpen && state.connected) {
-        NewThreadSheet(state, viewModel)
-    }
 }
 
 @Composable
@@ -96,45 +102,71 @@ private fun HomeScaffold(state: UiState, viewModel: MainViewModel) {
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                tonalElevation = 0.dp,
-            ) {
-                AppTab.entries.forEach { tab ->
-                    NavigationBarItem(
-                        selected = state.tab == tab,
-                        onClick = { viewModel.selectTab(tab) },
-                        icon = {
-                            Icon(
-                                imageVector = when (tab) {
-                                    AppTab.Threads -> Icons.Rounded.Forum
-                                    AppTab.Projects -> Icons.Rounded.FolderOpen
-                                    AppTab.Usage -> Icons.Rounded.BarChart
-                                    AppTab.Settings -> Icons.Rounded.Settings
-                                },
-                                contentDescription = tab.label,
-                            )
-                        },
-                        label = { Text(tab.label) },
-                    )
+            if (state.tab in bottomTabs) {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                    tonalElevation = 0.dp,
+                ) {
+                    bottomTabs.forEach { tab ->
+                        NavigationBarItem(
+                            selected = state.tab == tab,
+                            onClick = { viewModel.selectTab(tab) },
+                            icon = {
+                                Icon(
+                                    imageVector = when (tab) {
+                                        AppTab.PullRequests -> Icons.Rounded.CallMerge
+                                        else -> Icons.Rounded.Forum
+                                    },
+                                    contentDescription = tab.label,
+                                )
+                            },
+                            label = { Text(tab.label) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            ),
+                        )
+                    }
                 }
             }
         },
         floatingActionButton = {
             if (state.tab == AppTab.Threads) {
-                ExtendedFloatingActionButton(
-                    onClick = { viewModel.openNewThread() },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                    text = { Text("New thread") },
-                )
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    FloatingActionButton(
+                        onClick = { viewModel.setHomeFilterOpen(true) },
+                        shape = CircleShape,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ) {
+                        Icon(Icons.Rounded.FilterList, contentDescription = "Filter chats")
+                    }
+                    ExtendedFloatingActionButton(
+                        onClick = { viewModel.openNewThread() },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
+                        text = {
+                            Text(
+                                "New thread",
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                        },
+                    )
+                }
             }
         },
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when (state.tab) {
                 AppTab.Threads -> ThreadsScreen(state, viewModel)
+                AppTab.PullRequests -> PullRequestsScreen(state, viewModel)
                 AppTab.Projects -> ProjectsScreen(state, viewModel)
                 AppTab.Usage -> UsageScreen(state, viewModel)
                 AppTab.Settings -> SettingsScreen(state, viewModel)

@@ -1,5 +1,6 @@
 package com.t3codes.mobile
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -25,13 +26,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -211,10 +219,22 @@ fun Pill(
 }
 
 @Composable
+fun BackButton(onClick: () -> Unit) {
+    IconButton(onClick = onClick) {
+        Icon(
+            imageVector = Icons.Rounded.ArrowBack,
+            contentDescription = "Back",
+            modifier = Modifier.size(21.dp),
+        )
+    }
+}
+
+@Composable
 fun ScreenHeader(
     title: String,
     subtitle: String? = null,
     modifier: Modifier = Modifier,
+    leading: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
@@ -222,6 +242,7 @@ fun ScreenHeader(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        leading?.invoke()
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
@@ -873,3 +894,296 @@ fun CheckpointRow(entry: TimelineEntry) {
         )
     }
 }
+
+// ------------------------------------------------------------- compact work log
+//
+// The official client treats tool calls as quiet one-line activity. Only the
+// summary is visible by default; details live one tap deeper. Groups keep long
+// runs of work from pushing the conversation off screen.
+
+@Composable
+fun WorkGroupCard(entries: List<TimelineEntry>) {
+    val firstKey = entries.firstOrNull()?.key ?: "work"
+    var expanded by rememberSaveable(firstKey) { mutableStateOf(false) }
+    val streaming = entries.any { it.streaming }
+    val failed = entries.any(::workEntryFailed)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.62f)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 9.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            WorkGroupIcon(entries)
+            Spacer(Modifier.width(9.dp))
+            Text(
+                text = workGroupSummary(entries),
+                style = MaterialTheme.typography.labelLarge,
+                color = if (failed) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (streaming) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.8.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(6.dp))
+            }
+            Icon(
+                imageVector = Icons.Rounded.ExpandMore,
+                contentDescription = if (expanded) "Collapse work" else "Expand work",
+                modifier = Modifier.size(17.dp).rotate(if (expanded) 180f else 0f),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        AnimatedVisibility(visible = expanded) {
+            Column(modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 5.dp)) {
+                entries.forEach { entry ->
+                    WorkEntryRow(entry = entry, nested = true)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun WorkEntryRow(entry: TimelineEntry, nested: Boolean = false) {
+    var expanded by rememberSaveable(entry.key) { mutableStateOf(false) }
+    val failed = workEntryFailed(entry)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { expanded = !expanded }
+                .padding(
+                    start = if (nested) 8.dp else 5.dp,
+                    end = 5.dp,
+                    top = 7.dp,
+                    bottom = 7.dp,
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            WorkEntryIcon(entry)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = workEntryLabel(entry),
+                style = MaterialTheme.typography.labelLarge,
+                fontFamily = if (entry.kind == TimelineKind.Command) {
+                    FontFamily.Monospace
+                } else {
+                    FontFamily.Default
+                },
+                color = if (failed) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(7.dp))
+            when {
+                entry.streaming -> CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.8.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                failed && entry.exitCode != null -> Text(
+                    text = "exit ${entry.exitCode}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                failed -> Text(
+                    text = "failed",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Icon(
+                imageVector = Icons.Rounded.ExpandMore,
+                contentDescription = if (expanded) "Collapse details" else "Show details",
+                modifier = Modifier.size(15.dp).rotate(if (expanded) 180f else 0f),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+            )
+        }
+        AnimatedVisibility(visible = expanded) {
+            WorkEntryDetails(entry)
+        }
+    }
+}
+
+@Composable
+private fun WorkGroupIcon(entries: List<TimelineEntry>) {
+    val actions = entries.map(::workAction).toSet()
+    val icon = when {
+        actions.size == 1 && actions.first() == WorkAction.Command -> Icons.Rounded.Terminal
+        actions.size == 1 && actions.first() == WorkAction.Edit -> Icons.Rounded.Description
+        actions.size == 1 && actions.first() == WorkAction.Thought -> Icons.Rounded.Psychology
+        actions.size == 1 && actions.first() == WorkAction.Search -> Icons.Rounded.Search
+        actions.size == 1 && actions.first() == WorkAction.Browse -> Icons.Rounded.Language
+        actions.size == 1 && actions.first() == WorkAction.Read -> Icons.Rounded.Description
+        else -> Icons.Rounded.AutoAwesome
+    }
+    Icon(
+        imageVector = icon,
+        contentDescription = null,
+        modifier = Modifier.size(15.dp),
+        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+    )
+}
+
+@Composable
+private fun WorkEntryIcon(entry: TimelineEntry) {
+    val icon = when (workAction(entry)) {
+        WorkAction.Thought -> Icons.Rounded.Psychology
+        WorkAction.Command -> Icons.Rounded.Terminal
+        WorkAction.Edit -> Icons.Rounded.Description
+        WorkAction.Read -> Icons.Rounded.Description
+        WorkAction.Search -> Icons.Rounded.Search
+        WorkAction.Browse -> Icons.Rounded.Language
+        WorkAction.Tool -> Icons.Rounded.Build
+    }
+    Icon(
+        imageVector = icon,
+        contentDescription = null,
+        modifier = Modifier.size(15.dp),
+        tint = when (workAction(entry)) {
+            WorkAction.Thought -> MaterialTheme.colorScheme.primary
+            WorkAction.Command -> MaterialTheme.colorScheme.onSurfaceVariant
+            WorkAction.Edit -> MaterialTheme.colorScheme.tertiary
+            WorkAction.Read -> MaterialTheme.colorScheme.onSurfaceVariant
+            WorkAction.Search -> MaterialTheme.colorScheme.secondary
+            WorkAction.Browse -> MaterialTheme.colorScheme.secondary
+            WorkAction.Tool -> MaterialTheme.colorScheme.onSurfaceVariant
+        },
+    )
+}
+
+@Composable
+private fun WorkEntryDetails(entry: TimelineEntry) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 31.dp, end = 8.dp, bottom = 7.dp),
+    ) {
+        when (entry.kind) {
+            TimelineKind.Reasoning -> {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.55f),
+                ) {
+                    SelectionContainer {
+                        Text(
+                            text = entry.text,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(11.dp),
+                        )
+                    }
+                }
+            }
+
+            TimelineKind.Command -> CodeDetails(entry.command, entry.output)
+
+            TimelineKind.Tool -> {
+                if (entry.command.isNotBlank() || entry.output.isNotBlank()) {
+                    CodeDetails(entry.command, entry.output)
+                } else if (entry.secondary.isNotBlank()) {
+                    Text(
+                        text = entry.secondary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            TimelineKind.FileChange -> {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.55f),
+                ) {
+                    Column(modifier = Modifier.padding(11.dp)) {
+                        Text(
+                            text = entry.text.ifBlank { "File changed" },
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        if (entry.secondary.isNotBlank()) {
+                            Spacer(Modifier.height(5.dp))
+                            Text(
+                                text = entry.secondary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+
+            else -> {
+                if (entry.output.isNotBlank()) CodeDetails("", entry.output)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodeDetails(command: String, output: String) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.55f),
+    ) {
+        Column(modifier = Modifier.padding(11.dp)) {
+            if (command.isNotBlank()) {
+                SelectionContainer {
+                    Text(
+                        text = command,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+            if (command.isNotBlank() && output.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            if (output.isNotBlank()) {
+                SelectionContainer {
+                    Text(
+                        text = output,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 200,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun workEntryFailed(entry: TimelineEntry): Boolean =
+    (entry.exitCode != null && entry.exitCode != 0) ||
+        entry.status.equals("failed", ignoreCase = true) ||
+        entry.status.equals("error", ignoreCase = true)
