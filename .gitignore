@@ -11,8 +11,8 @@ android/.kotlin/
 *.apk
 *.aab
 
-# Generated JNI header (recreated by build-core.sh)
-core/mobile/libt3core.h
+# Native core is fetched from the t3code-core release by CI
+android/app/src/main/jniLibs/
 
 # Editors / OS
 .idea/

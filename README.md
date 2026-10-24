@@ -1,63 +1,55 @@
 # T3 Code Android
 
-A Kotlin + Material 3 Android app for T3 Code, backed by a native Go core over
-JNI. The Go core speaks the T3 orchestration protocol (Effect RPC over
-WebSocket plus the HTTP API) so the Android app does not need a JS runtime.
+A Kotlin + Material 3 Android client for T3 Code. The Go core talks to a T3
+environment over the orchestration protocol (Effect RPC over WebSocket plus the
+HTTP API) and exposes a small pull-based JNI facade to Kotlin, so the app does
+not need a JS runtime.
 
-## Status
+## Repositories
 
-- `core/` — Go SDK, RPC transport, live projection reducer, terminal, files,
-  git, previews, pull requests, usage, settings, and JNI facade.
-- `android/` — Kotlin bindings (`com.t3codes.core`) and a small Material 3
-  diagnostics UI that connects, pairs, lists projects/threads, and runs a
-  core self-test.
-- `android/app/src/main/jniLibs/arm64-v8a/libt3core.so` — prebuilt arm64 core
-  used by the app build.
+- **App** — this repository: Compose UI, Kotlin bindings, packaging, CI.
+- **[t3code-core](https://github.com/Shrawan-13/t3code-core)** — Go core,
+  protocol transport, projections, terminal/files/git APIs, JNI facade, and
+  cross-compiled Android libraries.
 
-This repository currently ships the arm64-v8a core. Other ABIs can be added by
-rebuilding `libt3core.so` for `GOOS=android` with the corresponding NDK target.
+Native libraries are **not** committed here. The app CI downloads the arm64
+library from a `t3code-core` release:
+
+```text
+https://github.com/Shrawan-13/t3code-core/releases/download/v0.1.0/libt3core-arm64-v8a.so
+```
+
+The core repository also publishes `armeabi-v7a` and `x86_64` builds. The debug
+APK currently packages `arm64-v8a` only; add the other ABI filters and download
+steps when they are needed.
 
 ## Layout
 
 ```
-core/          Go module: RPC transport, SDK, CLI, JNI facade
-  internal/rpc Effect RPC v4 client
-  t3/          typed SDK over the T3 protocol
-  mobile/      JNI entry points
-  cmd/t3ctl/   terminal client used for live protocol probing
-android/       Gradle project (Compose Material 3)
-tools/         helpers (Android .so runpath patch)
-scripts/       CI helpers (cache pruning)
-.github/       CI workflow that builds the debug APK
+android/            Gradle project (Compose, Material 3)
+  app/src/main/java/com/t3codes/core/    Kotlin JNI bindings and models
+  app/src/main/java/com/t3codes/mobile/  App UI and state
+scripts/            CI helpers (cache pruning)
+.github/            Debug APK workflow
 ```
 
-## CI
+## Build
 
-`.github/workflows/build-apk.yml` builds `:app:assembleDebug` on a GitHub runner
-with Gradle dependency and configuration caches, uploads the APK as an
-artifact, and then prunes Actions caches down to the newest 20 entries.
-
-## Building locally
-
-Prerequisites: JDK 17+, Android SDK with platform 34 and build-tools 34.0.0.
+CI builds on pushes to `main` and uploads `t3code-android-debug`:
 
 ```bash
-cd android
-gradle :app:assembleDebug
+gh workflow run build-apk.yml
 ```
 
-The Go core can be rebuilt from a Termux/Android host with the script
-`android/build-core.sh` (it also strips the Termux-only rpath from the shared
-library).
-
-## Go core tests
+Locally, fetch the core first:
 
 ```bash
-cd core
-go test ./...
+mkdir -p android/app/src/main/jniLibs/arm64-v8a
+curl -fL -o android/app/src/main/jniLibs/arm64-v8a/libt3core.so \
+  https://github.com/Shrawan-13/t3code-core/releases/download/v0.1.0/libt3core-arm64-v8a.so
+cd android && gradle :app:assembleDebug
 ```
 
-Live tests read a bearer token from `.secrets/token.txt` (ignored by git) or
-`T3_TEST_TOKEN`, and write-path tests additionally require `T3_TEST_WRITE=1`.
+Requirements: JDK 17+, Android SDK 34, build-tools 34.0.0.
 
-Never commit tokens, `.secrets/`, or pairing credentials.
+Never commit tokens or pairing credentials.
