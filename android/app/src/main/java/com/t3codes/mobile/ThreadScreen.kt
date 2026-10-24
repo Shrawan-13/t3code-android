@@ -167,6 +167,7 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
                             )
                         }
                     }
@@ -806,7 +807,9 @@ private fun Composer(
                 value = text,
                 onValueChange = { text = it },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Message T3…") },
+                placeholder = {
+                    Text(if (running) "Queue a message for T3…" else "Message T3…")
+                },
                 minLines = 1,
                 maxLines = 6,
                 shape = RoundedCornerShape(20.dp),
@@ -856,7 +859,9 @@ private fun Composer(
                             Icon(Icons.Rounded.Stop, contentDescription = "Stop", modifier = Modifier.size(21.dp))
                         }
                     }
-                } else {
+                    Spacer(Modifier.width(8.dp))
+                }
+                if (!running || canSend) {
                     Surface(
                         onClick = {
                             if (canSend) {
@@ -881,7 +886,7 @@ private fun Composer(
                             } else {
                                 Icon(
                                     Icons.Rounded.ArrowUpward,
-                                    contentDescription = "Send",
+                                    contentDescription = if (running) "Queue message" else "Send",
                                     modifier = Modifier.size(21.dp),
                                 )
                             }

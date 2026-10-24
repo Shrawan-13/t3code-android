@@ -12,6 +12,34 @@ not need a JS runtime.
   protocol transport, projections, terminal/files/git APIs, JNI facade, and
   cross-compiled Android libraries.
 
+## Install
+
+Download the latest debug APK:
+
+**[t3code-android-debug.apk (v0.2.0)](https://github.com/Shrawan-13/t3code-android/releases/download/v0.2.0-android/t3code-android-debug.apk)**
+
+Requires Android 8.0+ on an arm64 device. The APK is debug-signed and packages
+only `arm64-v8a`. You also need a reachable T3 environment plus an access token
+or device pairing link; enter either on the connect screen.
+
+All releases:
+<https://github.com/Shrawan-13/t3code-android/releases>
+
+## Features
+
+- Auto-connect with saved token, device pairing, and connection diagnostics
+- Grouped, searchable thread list with project filters, pin, rename, archive,
+  delete, and mark read/unread
+- Live thread timeline: Markdown, reasoning, commands, tool calls, file changes,
+  approvals, interrupts, and pull requests
+- Composer with image/file attachments, send, queue while running, stop, and
+  in-thread model switching
+- Project browser, usage dashboard with charts, provider list, and self-test
+- Terminal, workspace file browser, and diff viewer
+- Material 3 theme with custom violet palette and system/light/dark modes
+
+## Native core
+
 Native libraries are **not** committed here. The app CI downloads the arm64
 library from a `t3code-core` release:
 
