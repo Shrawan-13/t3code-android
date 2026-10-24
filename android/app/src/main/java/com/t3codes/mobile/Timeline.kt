@@ -81,6 +81,21 @@ fun ThreadProjection.isRunning(): Boolean = runs.any { run ->
     status in unfinishedRunStatuses
 }
 
+/** The run the Stop button should interrupt, if one is active. */
+fun ThreadProjection.activeRunId(summary: ThreadShell? = null): String? {
+    thread.activeRunId?.takeIf { it.isNotBlank() }?.let { return it }
+    summary?.activeRunId?.takeIf { it.isNotBlank() }?.let { return it }
+    for (run in runs.asReversed()) {
+        val item = run as? JsonObject ?: continue
+        val status = (item["status"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+        if (status !in unfinishedRunStatuses) continue
+        (item["id"] as? JsonPrimitive)?.contentOrNull
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+    }
+    return null
+}
+
 private fun TurnItem.toEntry(index: Int): TimelineEntry? {
     val entryKey = id.ifEmpty { "$type-$ordinal-$index" }
     return when (type) {

@@ -22,6 +22,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import java.io.Closeable
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 class T3Exception(message: String, val tag: String? = null) : RuntimeException(message)
@@ -196,6 +197,25 @@ class T3Connection internal constructor(
 
     fun stopThread(threadId: String) {
         T3Core.ensureOk(Native.nativeStopThread(handle, threadId))
+    }
+
+    /**
+     * Interrupts one run. Unlike thread.stop, run.interrupt is supported by
+     * environments that predate the thread-stop capability.
+     */
+    fun interruptRun(threadId: String, runId: String) {
+        callRaw(
+            "orchestration.dispatchCommand",
+            JsonObject(
+                mapOf(
+                    "type" to JsonPrimitive("run.interrupt"),
+                    "commandId" to JsonPrimitive(UUID.randomUUID().toString()),
+                    "threadId" to JsonPrimitive(threadId),
+                    "runId" to JsonPrimitive(runId),
+                    "holdQueue" to JsonPrimitive(true),
+                ),
+            ),
+        )
     }
 
     fun respondToRequest(

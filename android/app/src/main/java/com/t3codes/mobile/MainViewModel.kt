@@ -789,9 +789,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopRun() {
         val current = state.thread ?: return
         val conn = connection ?: return
+        val runId = current.projection.activeRunId(current.summary ?: state.summaryFor(current.threadId))
+        if (runId.isNullOrBlank()) {
+            toast("No active run to stop.")
+            return
+        }
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { conn.stopThread(current.threadId) }
+                withContext(Dispatchers.IO) { conn.interruptRun(current.threadId, runId) }
                 toast("Stopping…")
             } catch (error: Throwable) {
                 toast(describe(error))
