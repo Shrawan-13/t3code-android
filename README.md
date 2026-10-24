@@ -34,6 +34,8 @@ All releases:
   approvals, interrupts, and pull requests
 - Composer with image/file attachments, send, queue while running, stop, and
   in-thread model switching
+- Per-thread run permissions (ask first, auto-accept edits, auto, full access)
+  and plan mode
 - Project browser, usage dashboard with charts, provider list, and self-test
 - Terminal, workspace file browser, and diff viewer
 - Material 3 theme with custom violet palette and system/light/dark modes

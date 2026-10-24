@@ -45,6 +45,7 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PushPin
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -122,8 +123,11 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
     var renameOpen by remember { mutableStateOf(false) }
     var deleteOpen by remember { mutableStateOf(false) }
     var modelPickerOpen by remember { mutableStateOf(false) }
+    var runtimePickerOpen by remember { mutableStateOf(false) }
     val modelChoices = remember(state.config) { state.config?.modelChoices().orEmpty() }
     val currentSelection = summary?.modelSelection
+    val runtimeMode = summary?.runtimeMode.orEmpty()
+    val planMode = summary?.interactionMode == "plan"
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -208,6 +212,26 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                                 onClick = {
                                     menuOpen = false
                                     modelPickerOpen = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Run permissions") },
+                                leadingIcon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    runtimePickerOpen = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (planMode) "Leave plan mode" else "Plan mode") },
+                                leadingIcon = { Icon(Icons.Rounded.AutoAwesome, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    viewModel.threadAction(
+                                        thread.threadId,
+                                        "setInteractionMode",
+                                        if (planMode) "default" else "plan",
+                                    )
                                 },
                             )
                             DropdownMenuItem(
@@ -376,6 +400,60 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
             },
             confirmButton = {
                 TextButton(onClick = { modelPickerOpen = false }) { Text("Done") }
+            },
+        )
+    }
+
+    if (runtimePickerOpen) {
+        AlertDialog(
+            onDismissRequest = { runtimePickerOpen = false },
+            title = { Text("Run permissions") },
+            text = {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 380.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(runtimeModes, key = { it.value }) { mode ->
+                        val selected = runtimeMode == mode.value
+                        Surface(
+                            onClick = {
+                                viewModel.threadAction(
+                                    thread.threadId,
+                                    "setRuntimeMode",
+                                    mode.value,
+                                )
+                                runtimePickerOpen = false
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (selected) MaterialTheme.colorScheme.primaryContainer
+                            else Color.Transparent,
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(mode.label, style = MaterialTheme.typography.labelLarge)
+                                    Text(
+                                        text = mode.description,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                if (selected) {
+                                    Icon(
+                                        Icons.Rounded.Check,
+                                        contentDescription = "Selected",
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { runtimePickerOpen = false }) { Text("Cancel") }
             },
         )
     }
@@ -897,6 +975,35 @@ private fun Composer(
         }
     }
 }
+
+private data class RuntimeModeOption(
+    val value: String,
+    val label: String,
+    val description: String,
+)
+
+private val runtimeModes = listOf(
+    RuntimeModeOption(
+        value = "approval-required",
+        label = "Ask first",
+        description = "Approve commands and file changes",
+    ),
+    RuntimeModeOption(
+        value = "auto-accept-edits",
+        label = "Auto-accept edits",
+        description = "Approve file edits, ask before commands",
+    ),
+    RuntimeModeOption(
+        value = "auto",
+        label = "Auto",
+        description = "Ask only when T3 thinks it is necessary",
+    ),
+    RuntimeModeOption(
+        value = "full-access",
+        label = "Full access",
+        description = "Run commands and edit files without asking",
+    ),
+)
 
 private data class PullRequestInfo(
     val title: String,
