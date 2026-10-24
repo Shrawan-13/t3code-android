@@ -5,6 +5,12 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// CI installs a stable debug keystore so later builds can update an installed
+// build in place. Local builds fall back to the standard debug key.
+val ciDebugKeystore = System.getenv("DEBUG_KEYSTORE_PATH")
+    ?.let { file(it) }
+    ?.takeIf { it.exists() }
+
 android {
     namespace = "com.t3codes.mobile"
     compileSdk = 34
@@ -20,7 +26,23 @@ android {
         }
     }
 
+    signingConfigs {
+        if (ciDebugKeystore != null) {
+            create("ciDebug") {
+                storeFile = ciDebugKeystore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (ciDebugKeystore != null) {
+                signingConfig = signingConfigs.getByName("ciDebug")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

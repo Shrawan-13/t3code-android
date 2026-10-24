@@ -54,10 +54,11 @@ jobs:
             echo "No stable debug keystore configured; using the runner default."
             exit 0
           fi
-          mkdir -p "$HOME/.android"
-          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
-          chmod 600 "$HOME/.android/debug.keystore"
-          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | head -3
+          mkdir -p android/keystore
+          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > android/keystore/debug.keystore
+          chmod 600 android/keystore/debug.keystore
+          echo "DEBUG_KEYSTORE_PATH=${GITHUB_WORKSPACE}/android/keystore/debug.keystore" >> "$GITHUB_ENV"
+          keytool -list -keystore android/keystore/debug.keystore -storepass android -alias androiddebugkey | head -3
 
       - name: Set up Gradle (dependency cache)
         uses: gradle/actions/setup-gradle@v4

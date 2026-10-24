@@ -13,6 +13,7 @@ android/.kotlin/
 
 # Native core is fetched from the t3code-core release by CI
 android/app/src/main/jniLibs/
+android/keystore/
 
 # Editors / OS
 .idea/
