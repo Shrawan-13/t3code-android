@@ -41,18 +41,28 @@ fun T3App(viewModel: MainViewModel) {
     LaunchedEffect(state.error) {
         state.error?.let {
             snackbar.showSnackbar(it)
-            viewModel.clearError()
+            if (state.connected) viewModel.clearError()
         }
     }
 
     BackHandler(enabled = state.terminal != null) { viewModel.closeTerminal() }
     BackHandler(enabled = state.terminal == null && state.diff != null) { viewModel.closeDiff() }
     BackHandler(
-        enabled = state.terminal == null && state.diff == null && state.activeThreadId != null,
+        enabled = state.terminal == null && state.diff == null &&
+            state.files?.file != null,
+    ) { viewModel.closeFile() }
+    BackHandler(
+        enabled = state.terminal == null && state.diff == null &&
+            state.files != null && state.files.file == null,
+    ) { viewModel.closeFiles() }
+    BackHandler(
+        enabled = state.terminal == null && state.diff == null && state.files == null &&
+            state.activeThreadId != null,
     ) { viewModel.closeThread() }
     BackHandler(
         enabled = state.terminal == null &&
             state.diff == null &&
+            state.files == null &&
             state.activeThreadId == null &&
             state.connected &&
             state.tab != AppTab.Threads,
@@ -63,6 +73,7 @@ fun T3App(viewModel: MainViewModel) {
             !state.connected -> ConnectScreen(state, viewModel)
             state.terminal != null -> TerminalScreen(state, viewModel)
             state.diff != null -> DiffScreen(state, viewModel)
+            state.files != null -> FilesScreen(state, viewModel)
             state.activeThreadId != null && state.thread != null -> ThreadScreen(state, viewModel)
             else -> HomeScaffold(state, viewModel)
         }

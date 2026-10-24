@@ -15,6 +15,7 @@ import com.t3codes.core.DiffPreview
 import com.t3codes.core.Model
 import com.t3codes.core.ModelSelection
 import com.t3codes.core.Project
+import com.t3codes.core.ProjectEntry
 import com.t3codes.core.RuntimeRequest
 import com.t3codes.core.ServerConfig
 import com.t3codes.core.ShellFeed
@@ -88,6 +89,25 @@ data class DiffUi(
     val error: String? = null,
 )
 
+data class FileView(
+    val path: String,
+    val relativePath: String,
+    val contents: String,
+    val byteLength: Int,
+    val truncated: Boolean,
+)
+
+data class FilesUi(
+    val threadId: String,
+    val cwd: String,
+    val directory: String = "",
+    val entries: List<ProjectEntry> = emptyList(),
+    val truncated: Boolean = false,
+    val loading: Boolean = true,
+    val error: String? = null,
+    val file: FileView? = null,
+)
+
 data class UiState(
     val baseUrl: String = "http://127.0.0.1:3773",
     val token: String = "",
@@ -111,6 +131,7 @@ data class UiState(
     val usage: UsageUi? = null,
     val terminal: TerminalUi? = null,
     val diff: DiffUi? = null,
+    val files: FilesUi? = null,
     val themePref: ThemePref = ThemePref.System,
     val selfTestBusy: Boolean = false,
     val selfTestLog: List<String> = emptyList(),
@@ -137,6 +158,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var terminalFeed: TerminalFeed? = null
     private var terminalJob: Job? = null
     private var diffJob: Job? = null
+    private var filesJob: Job? = null
     private var usageJob: Job? = null
     private var actionJob: Job? = null
 
@@ -267,6 +289,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 thread = null,
                 terminal = null,
                 diff = null,
+                files = null,
                 usage = null,
                 newThreadOpen = false,
                 tab = AppTab.Threads,
@@ -690,19 +713,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openTerminal(threadId: String) {
         val conn = connection ?: return
-        val detail = state.thread?.takeIf { it.threadId == threadId }?.projection?.thread
-        val summary = detail?.takeIf { it.id.isNotEmpty() } ?: state.summaryFor(threadId)
-        val project = state.projectFor(summary)
-        val cwd = summary?.worktreePath?.takeIf { it.isNotBlank() }
-            ?: project?.workspaceRoot
-            ?: return
+        val cwd = resolveCwd(threadId) ?: return
         closeTerminal()
         state = state.copy(terminal = TerminalUi(threadId = threadId, cwd = cwd))
         terminalJob = viewModelScope.launch {
             try {
                 val feed = withContext(Dispatchers.IO) {
-                    runCatching { conn.openTerminal(threadId = threadId, cwd = cwd, cols = 100, rows = 30) }
-                    conn.attachTerminal(threadId = threadId, cwd = cwd, cols = 100, rows = 30)
+                    runCatching { conn.openTerminal(threadId = threadId, cwd = cwd, cols = 80, rows = 24) }
+                    conn.attachTerminal(threadId = threadId, cwd = cwd, cols = 80, rows = 24)
                 }
                 terminalFeed = feed
                 state = state.copy(terminal = state.terminal?.copy(connected = true))
@@ -794,10 +812,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openDiff(threadId: String) {
         val conn = connection ?: return
-        val detail = state.thread?.takeIf { it.threadId == threadId }?.projection?.thread
-        val summary = detail?.takeIf { it.id.isNotEmpty() } ?: state.summaryFor(threadId)
-        val project = state.projectFor(summary)
-        val cwd = summary?.worktreePath?.takeIf { it.isNotBlank() } ?: project?.workspaceRoot ?: return
+        val cwd = resolveCwd(threadId) ?: return
         diffJob?.cancel()
         state = state.copy(diff = DiffUi(threadId = threadId, cwd = cwd, loading = true))
         diffJob = viewModelScope.launch {
@@ -835,6 +850,106 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         diffJob?.cancel()
         diffJob = null
         state = state.copy(diff = null)
+    }
+
+    // ---------------------------------------------------------------------- files
+
+    fun openFiles(threadId: String) {
+        val cwd = resolveCwd(threadId) ?: return
+        filesJob?.cancel()
+        state = state.copy(
+            files = FilesUi(threadId = threadId, cwd = cwd, directory = "", loading = true),
+        )
+        loadEntries(cwd, "")
+    }
+
+    private fun loadEntries(cwd: String, directory: String) {
+        val conn = connection ?: return
+        val current = state.files ?: return
+        state = state.copy(
+            files = current.copy(directory = directory, loading = true, error = null),
+        )
+        filesJob = viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { conn.listEntries(cwd, directory) }
+                val latest = state.files ?: return@launch
+                if (latest.cwd != cwd) return@launch
+                state = state.copy(
+                    files = latest.copy(
+                        entries = result.entries,
+                        truncated = result.truncated,
+                        loading = false,
+                    ),
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                val latest = state.files ?: return@launch
+                state = state.copy(files = latest.copy(loading = false, error = describe(error)))
+            }
+        }
+    }
+
+    fun navigateFiles(directory: String) {
+        val current = state.files ?: return
+        loadEntries(current.cwd, directory)
+    }
+
+    fun openFile(path: String) {
+        val conn = connection ?: return
+        val current = state.files ?: return
+        filesJob?.cancel()
+        state = state.copy(files = current.copy(loading = true, error = null))
+        filesJob = viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { conn.readFile(current.cwd, path) }
+                if (result.exists == false) throw T3Exception("That file no longer exists.")
+                val latest = state.files ?: return@launch
+                if (latest.cwd != current.cwd) return@launch
+                state = state.copy(
+                    files = latest.copy(
+                        loading = false,
+                        error = null,
+                        file = FileView(
+                            path = path,
+                            relativePath = result.relativePath.ifBlank { path },
+                            contents = result.contents,
+                            byteLength = result.byteLength,
+                            truncated = result.truncated,
+                        ),
+                    ),
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                val latest = state.files ?: return@launch
+                state = state.copy(files = latest.copy(loading = false, error = describe(error)))
+            }
+        }
+    }
+
+    fun refreshFiles() {
+        val current = state.files ?: return
+        val file = current.file
+        if (file != null) openFile(file.path) else loadEntries(current.cwd, current.directory)
+    }
+
+    fun closeFile() {
+        val current = state.files ?: return
+        state = state.copy(files = current.copy(file = null, error = null))
+    }
+
+    fun closeFiles() {
+        filesJob?.cancel()
+        filesJob = null
+        state = state.copy(files = null)
+    }
+
+    private fun resolveCwd(threadId: String): String? {
+        val detail = state.thread?.takeIf { it.threadId == threadId }?.projection?.thread
+        val summary = detail?.takeIf { it.id.isNotEmpty() } ?: state.summaryFor(threadId)
+        val project = state.projectFor(summary)
+        return summary?.worktreePath?.takeIf { it.isNotBlank() } ?: project?.workspaceRoot
     }
 
     // ---------------------------------------------------------------- diagnostics
@@ -901,6 +1016,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         terminalFeed = null
         diffJob?.cancel()
         diffJob = null
+        filesJob?.cancel()
+        filesJob = null
         usageJob?.cancel()
         usageJob = null
         actionJob?.cancel()

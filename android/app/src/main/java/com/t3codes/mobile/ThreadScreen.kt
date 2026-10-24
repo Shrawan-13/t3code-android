@@ -41,6 +41,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Difference
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PushPin
@@ -190,6 +191,14 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                                 onClick = {
                                     menuOpen = false
                                     viewModel.openTerminal(thread.threadId)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Browse files") },
+                                leadingIcon = { Icon(Icons.Rounded.FolderOpen, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    viewModel.openFiles(thread.threadId)
                                 },
                             )
                             DropdownMenuItem(
