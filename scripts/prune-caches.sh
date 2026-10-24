@@ -26,6 +26,10 @@ fi
 sort -t $'\t' -k2,2r "$tmp" | tail -n "+$((keep + 1))" |
 while IFS=$'\t' read -r id last_accessed created size key; do
   [ -n "${id:-}" ] || continue
-  echo "Deleting cache $id (${size:-?} bytes, last accessed ${last_accessed:-?}): $key"
-  gh api -X DELETE "repos/$repo/actions/caches/$id" >/dev/null
+  if [ "${DRY_RUN:-0}" = "1" ]; then
+    echo "Would delete cache $id (${size:-?} bytes, last accessed ${last_accessed:-?}): $key"
+  else
+    echo "Deleting cache $id (${size:-?} bytes, last accessed ${last_accessed:-?}): $key"
+    gh api -X DELETE "repos/$repo/actions/caches/$id" >/dev/null
+  fi
 done
