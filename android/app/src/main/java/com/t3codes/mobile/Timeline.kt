@@ -85,6 +85,14 @@ fun ThreadProjection.isRunning(): Boolean = runs.any { run ->
 fun ThreadProjection.activeRunId(summary: ThreadShell? = null): String? {
     thread.activeRunId?.takeIf { it.isNotBlank() }?.let { return it }
     summary?.activeRunId?.takeIf { it.isNotBlank() }?.let { return it }
+    // Older projections can report a running status without activeRunId; the
+    // latest run is then the one the Stop button means.
+    if (thread.status == "running") {
+        thread.latestRunId?.takeIf { it.isNotBlank() }?.let { return it }
+    }
+    if (summary?.status == "running") {
+        summary.latestRunId?.takeIf { it.isNotBlank() }?.let { return it }
+    }
     for (run in runs.asReversed()) {
         val item = run as? JsonObject ?: continue
         val status = (item["status"] as? JsonPrimitive)?.contentOrNull.orEmpty()
