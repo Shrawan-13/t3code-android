@@ -45,6 +45,20 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Install stable debug keystore
+        shell: bash
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$DEBUG_KEYSTORE_B64" ]; then
+            echo "No stable debug keystore configured; using the runner default."
+            exit 0
+          fi
+          mkdir -p "$HOME/.android"
+          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | head -3
+
       - name: Set up Gradle (dependency cache)
         uses: gradle/actions/setup-gradle@v4
         with:
