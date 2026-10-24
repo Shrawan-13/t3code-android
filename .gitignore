@@ -1,0 +1,20 @@
+# Local secrets and reference checkout
+.secrets/
+reference/
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.kotlin/
+*.apk
+*.aab
+
+# Generated JNI header (recreated by build-core.sh)
+core/mobile/libt3core.h
+
+# Editors / OS
+.idea/
+*.iml
+.DS_Store
