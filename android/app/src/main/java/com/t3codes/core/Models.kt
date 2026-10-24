@@ -347,18 +347,12 @@ data class ThreadProjection(
 
 @Serializable
 data class ThreadState(
-    val Projection: ThreadProjection = ThreadProjection(),
-    val Sequence: Long = 0,
-    val HistoryCursor: String? = null,
-    val HasMoreHistory: Boolean = false,
-    val Partial: Boolean = false,
-) {
-    val projection: ThreadProjection get() = Projection
-    val sequence: Long get() = Sequence
-    val historyCursor: String? get() = HistoryCursor
-    val hasMoreHistory: Boolean get() = HasMoreHistory
-    val partial: Boolean get() = Partial
-}
+    @SerialName("Projection") val projection: ThreadProjection = ThreadProjection(),
+    @SerialName("Sequence") val sequence: Long = 0,
+    @SerialName("HistoryCursor") val historyCursor: String? = null,
+    @SerialName("HasMoreHistory") val hasMoreHistory: Boolean = false,
+    @SerialName("Partial") val partial: Boolean = false,
+)
 
 @Serializable
 data class ThreadEvent(
