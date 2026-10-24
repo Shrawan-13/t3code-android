@@ -221,8 +221,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val result = withContext(Dispatchers.IO) {
                     stopAllStreams()
                     val next = T3Core.connect(base, token)
-                    val shell = next.shell()
-                    next to shell
+                    try {
+                        next to next.shell()
+                    } catch (error: Throwable) {
+                        runCatching { next.close() }
+                        throw error
+                    }
                 }
                 connection = result.first
                 prefs.edit()
@@ -396,6 +400,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         threadJob = viewModelScope.launch {
             val conn = connection ?: return@launch
+            var feed: ThreadFeed? = null
             try {
                 val detail = withContext(Dispatchers.IO) { conn.thread(threadId) }
                 if (!isActive || state.activeThreadId != threadId) return@launch
@@ -412,13 +417,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 runCatching {
                     withContext(Dispatchers.IO) { conn.threadAction(threadId, "markRead") }
                 }
-                val feed = withContext(Dispatchers.IO) {
+                val next = withContext(Dispatchers.IO) {
                     conn.watchThread(threadId, detail.snapshotSequence, false)
                 }
-                threadFeed = feed
-                feed.events.collect {
+                if (!isActive || state.activeThreadId != threadId) {
+                    runCatching { next.close() }
+                    return@launch
+                }
+                feed = next
+                threadFeed = next
+                next.events.collect {
                     val snapshot = withContext(Dispatchers.IO) {
-                        runCatching { feed.state() }.getOrNull()
+                        runCatching { next.state() }.getOrNull()
                     } ?: return@collect
                     if (state.activeThreadId != threadId) return@collect
                     val current = state.thread ?: return@collect
@@ -442,8 +452,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             } finally {
-                runCatching { threadFeed?.close() }
-                threadFeed = null
+                runCatching { feed?.close() }
+                if (threadFeed === feed) threadFeed = null
             }
         }
     }
@@ -512,16 +522,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         mode = if (running) "queue_after_active" else "start_immediately",
                     )
                 }
-                state = state.copy(
-                    thread = state.thread?.copy(
-                        sending = false,
-                        pendingAttachments = emptyList(),
-                    ),
-                )
+                val latest = state.thread
+                if (latest?.threadId == current.threadId) {
+                    state = state.copy(
+                        thread = latest.copy(
+                            sending = false,
+                            pendingAttachments = emptyList(),
+                        ),
+                    )
+                }
             } catch (error: Throwable) {
-                state = state.copy(
-                    thread = state.thread?.copy(sending = false, error = describe(error)),
-                )
+                val latest = state.thread
+                if (latest?.threadId == current.threadId) {
+                    state = state.copy(
+                        thread = latest.copy(sending = false, error = describe(error)),
+                    )
+                }
             }
         }
     }
@@ -593,6 +609,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val resolver = getApplication<Application>().contentResolver
                     val name = displayName(resolver, uri)
                     val mime = resolver.getType(uri) ?: "application/octet-stream"
+                    if ((fileSize(resolver, uri) ?: 0L) > MAX_ATTACHMENT_BYTES) {
+                        throw T3Exception("Attachments are limited to ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB.")
+                    }
                     val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
                         ?: throw T3Exception("Could not read the selected file.")
                     if (bytes.size > MAX_ATTACHMENT_BYTES) {
@@ -606,6 +625,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 val latest = state.thread ?: return@launch
+                if (latest.threadId != current.threadId) return@launch
                 state = state.copy(
                     thread = latest.copy(
                         uploading = false,
@@ -613,8 +633,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ),
                 )
             } catch (error: Throwable) {
+                val latest = state.thread ?: return@launch
+                if (latest.threadId != current.threadId) return@launch
                 state = state.copy(
-                    thread = state.thread?.copy(uploading = false, error = describe(error)),
+                    thread = latest.copy(uploading = false, error = describe(error)),
                 )
             }
         }
@@ -721,21 +743,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         closeTerminal()
         state = state.copy(terminal = TerminalUi(threadId = threadId, cwd = cwd))
         terminalJob = viewModelScope.launch {
+            var feed: TerminalFeed? = null
             try {
-                val feed = withContext(Dispatchers.IO) {
+                val next = withContext(Dispatchers.IO) {
                     runCatching { conn.openTerminal(threadId = threadId, cwd = cwd, cols = 80, rows = 24) }
                     conn.attachTerminal(threadId = threadId, cwd = cwd, cols = 80, rows = 24)
                 }
-                terminalFeed = feed
+                if (!isActive || state.terminal?.threadId != threadId) {
+                    runCatching { next.close() }
+                    return@launch
+                }
+                feed = next
+                terminalFeed = next
                 state = state.copy(terminal = state.terminal?.copy(connected = true))
-                feed.events.collect { event ->
+                next.events.collect { event ->
                     val terminal = state.terminal ?: return@collect
+                    if (terminal.threadId != threadId) return@collect
                     when (event.type) {
                         "output" -> appendTerminal(terminal, stripAnsi(event.data))
-                        "snapshot" -> event.snapshot?.history?.let {
-                            state = state.copy(
-                                terminal = terminal.copy(text = stripAnsi(it).takeLast(MAX_TERMINAL_CHARS)),
-                            )
+                        "snapshot" -> {
+                            val history = event.snapshot?.history
+                            val latest = state.terminal
+                            if (history != null && latest?.threadId == threadId) {
+                                state = state.copy(
+                                    terminal = latest.copy(
+                                        text = stripAnsi(history).takeLast(MAX_TERMINAL_CHARS),
+                                    ),
+                                )
+                            }
                         }
                         "exit" -> appendTerminal(
                             terminal,
@@ -751,10 +786,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                state = state.copy(terminal = state.terminal?.copy(error = describe(error)))
+                val latest = state.terminal
+                if (latest?.threadId == threadId) {
+                    state = state.copy(terminal = latest.copy(error = describe(error)))
+                }
             } finally {
-                runCatching { terminalFeed?.close() }
-                terminalFeed = null
+                runCatching { feed?.close() }
+                if (terminalFeed === feed) terminalFeed = null
             }
         }
     }
@@ -825,25 +863,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         diffJob = viewModelScope.launch {
             try {
                 val preview = withContext(Dispatchers.IO) { conn.diffPreview(cwd) }
-                state = state.copy(
-                    diff = DiffUi(
-                        threadId = threadId,
-                        cwd = cwd,
-                        preview = preview,
-                        loading = false,
-                    ),
-                )
+                val latest = state.diff
+                if (latest?.threadId == threadId) {
+                    state = state.copy(
+                        diff = latest.copy(preview = preview, loading = false, error = null),
+                    )
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                state = state.copy(
-                    diff = DiffUi(
-                        threadId = threadId,
-                        cwd = cwd,
-                        loading = false,
-                        error = describe(error),
-                    ),
-                )
+                val latest = state.diff
+                if (latest?.threadId == threadId) {
+                    state = state.copy(
+                        diff = latest.copy(loading = false, error = describe(error)),
+                    )
+                }
             }
         }
     }
@@ -1053,6 +1087,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         return uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "attachment"
     }
+
+    private fun fileSize(resolver: ContentResolver, uri: Uri): Long? = runCatching {
+        resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index) else null
+            } else {
+                null
+            }
+        }
+    }.getOrNull()
 
     private fun describe(error: Throwable): String = when (error) {
         is T3Exception ->
