@@ -174,7 +174,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     init {
-        if (state.token.isNotBlank()) connect()
+        val shouldAutoConnect = prefs.getBoolean(KEY_AUTO, true)
+        if (shouldAutoConnect && state.token.isNotBlank()) connect()
     }
 
     // ---------------------------------------------------------------- connection
@@ -228,6 +229,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 prefs.edit()
                     .putString(KEY_BASE, base)
                     .putString(KEY_TOKEN, token)
+                    .putBoolean(KEY_AUTO, true)
                     .apply()
                 state = state.copy(
                     connecting = false,
@@ -268,7 +270,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val token = withContext(Dispatchers.IO) { T3Core.pair(base, link).accessToken }
-                prefs.edit().putString(KEY_BASE, base).putString(KEY_TOKEN, token).apply()
+                prefs.edit().putString(KEY_BASE, base).putString(KEY_TOKEN, token).putBoolean(KEY_AUTO, true).apply()
                 state = state.copy(connecting = false, token = token, pairingLink = "", error = null)
                 connect()
             } catch (error: Throwable) {
@@ -278,6 +280,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnect() {
+        prefs.edit().putBoolean(KEY_AUTO, false).apply()
         viewModelScope.launch {
             withContext(Dispatchers.IO) { stopAllStreams() }
             state = state.copy(
@@ -1058,6 +1061,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val KEY_BASE = "base_url"
         const val KEY_TOKEN = "token"
         const val KEY_THEME = "theme_pref"
+        const val KEY_AUTO = "auto_connect"
         const val MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
         const val MAX_TERMINAL_CHARS = 300_000
 
