@@ -151,6 +151,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
         private set
 
+    init {
+        if (state.token.isNotBlank()) connect()
+    }
+
     // ---------------------------------------------------------------- connection
 
     fun onBaseUrlChange(value: String) {
@@ -211,6 +215,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     projects = result.second.projects,
                     threads = result.second.threads,
                     archivedThreads = result.second.archivedThreads,
+                    projectFilter = null,
+                    search = "",
                     error = null,
                 )
                 startShellWatch()
@@ -264,6 +270,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 usage = null,
                 newThreadOpen = false,
                 tab = AppTab.Threads,
+                projectFilter = null,
+                search = "",
+                showArchived = false,
                 error = null,
             )
         }
@@ -439,7 +448,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val page = withContext(Dispatchers.IO) { conn.threadHistory(current.threadId, cursor) }
                 val latest = state.thread ?: return@launch
                 if (latest.threadId != current.threadId) return@launch
-                val merged = (page.items + latest.olderItems).distinctBy { it.item.id }
+                val visibleIds = latest.projection.visibleTurnItems.map { it.item.id }.toSet()
+                val merged = (page.items + latest.olderItems)
+                    .distinctBy { it.item.id }
+                    .filterNot { it.item.id in visibleIds }
                 state = state.copy(
                     thread = latest.copy(
                         olderItems = merged,
@@ -678,7 +690,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openTerminal(threadId: String) {
         val conn = connection ?: return
-        val summary = state.summaryFor(threadId)
+        val detail = state.thread?.takeIf { it.threadId == threadId }?.projection?.thread
+        val summary = detail?.takeIf { it.id.isNotEmpty() } ?: state.summaryFor(threadId)
         val project = state.projectFor(summary)
         val cwd = summary?.worktreePath?.takeIf { it.isNotBlank() }
             ?: project?.workspaceRoot
@@ -781,7 +794,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openDiff(threadId: String) {
         val conn = connection ?: return
-        val summary = state.summaryFor(threadId)
+        val detail = state.thread?.takeIf { it.threadId == threadId }?.projection?.thread
+        val summary = detail?.takeIf { it.id.isNotEmpty() } ?: state.summaryFor(threadId)
         val project = state.projectFor(summary)
         val cwd = summary?.worktreePath?.takeIf { it.isNotBlank() } ?: project?.workspaceRoot ?: return
         diffJob?.cancel()

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Difference
@@ -80,13 +82,16 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.t3codes.core.ModelSelection
 import com.t3codes.core.Project
 import com.t3codes.core.RuntimeRequest
+import com.t3codes.core.T3Core
 import com.t3codes.core.ThreadShell
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.intOrNull
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -115,6 +120,9 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
     var menuOpen by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var deleteOpen by remember { mutableStateOf(false) }
+    var modelPickerOpen by remember { mutableStateOf(false) }
+    val modelChoices = remember(state.config) { state.config?.modelChoices().orEmpty() }
+    val currentSelection = summary?.modelSelection
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -182,6 +190,14 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                                 onClick = {
                                     menuOpen = false
                                     viewModel.openTerminal(thread.threadId)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Change model") },
+                                leadingIcon = { Icon(Icons.Rounded.AutoAwesome, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    modelPickerOpen = true
                                 },
                             )
                             DropdownMenuItem(
@@ -285,6 +301,75 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
         }
     }
 
+    if (modelPickerOpen) {
+        AlertDialog(
+            onDismissRequest = { modelPickerOpen = false },
+            title = { Text("Change model") },
+            text = {
+                if (modelChoices.isEmpty()) {
+                    Text(
+                        text = "No models are available from the connected providers.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 420.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        items(modelChoices, key = { it.key }) { choice ->
+                            val selected = currentSelection?.instanceId == choice.instanceId &&
+                                currentSelection?.model == choice.model.key
+                            Surface(
+                                onClick = {
+                                    val selection = ModelSelection(
+                                        instanceId = choice.instanceId,
+                                        model = choice.model.key,
+                                    )
+                                    viewModel.threadAction(
+                                        thread.threadId,
+                                        "setModel",
+                                        T3Core.json.encodeToJsonElement(selection).toString(),
+                                    )
+                                    modelPickerOpen = false
+                                },
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primaryContainer
+                                else Color.Transparent,
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = choice.model.label,
+                                            style = MaterialTheme.typography.labelLarge,
+                                        )
+                                        Text(
+                                            text = choice.providerName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    if (selected) {
+                                        Icon(
+                                            Icons.Rounded.Check,
+                                            contentDescription = "Selected",
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { modelPickerOpen = false }) { Text("Done") }
+            },
+        )
+    }
+
     if (renameOpen) {
         var value by remember(thread.threadId, summary?.title) {
             mutableStateOf(summary?.title ?: title)
@@ -356,11 +441,17 @@ private fun TimelineContent(
             lastVisible >= info.totalItemsCount - 2
         }
     }
-    LaunchedEffect(itemCount) {
-        if (itemCount > 0) listState.scrollToItem(itemCount - 1)
+    var initialScrollDone by remember(thread.threadId) { mutableStateOf(false) }
+    LaunchedEffect(thread.threadId, thread.loading, itemCount) {
+        if (!initialScrollDone && itemCount > 0) {
+            listState.scrollToItem(itemCount - 1)
+            initialScrollDone = true
+        }
     }
-    LaunchedEffect(rows.lastOrNull()?.text, rows.lastOrNull()?.output) {
-        if (atBottom && itemCount > 0) listState.scrollToItem(itemCount - 1)
+    LaunchedEffect(rows.size, rows.lastOrNull()?.text, rows.lastOrNull()?.output, running) {
+        if (initialScrollDone && atBottom && itemCount > 0) {
+            listState.scrollToItem(itemCount - 1)
+        }
     }
 
     LazyColumn(
@@ -389,7 +480,7 @@ private fun TimelineContent(
         items(pullRequests) { pullRequest ->
             PullRequestCard(pullRequest)
         }
-        items(rows) { entry ->
+        items(rows, key = { it.key }) { entry ->
             when (entry.kind) {
                 TimelineKind.User -> UserBubble(entry)
                 TimelineKind.Assistant -> AssistantMessage(entry)

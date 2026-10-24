@@ -38,6 +38,13 @@ fun T3App(viewModel: MainViewModel) {
         }
     }
 
+    LaunchedEffect(state.error) {
+        state.error?.let {
+            snackbar.showSnackbar(it)
+            viewModel.clearError()
+        }
+    }
+
     BackHandler(enabled = state.terminal != null) { viewModel.closeTerminal() }
     BackHandler(enabled = state.terminal == null && state.diff != null) { viewModel.closeDiff() }
     BackHandler(
