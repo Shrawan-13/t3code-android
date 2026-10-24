@@ -123,15 +123,19 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                 )
             }
 
-            Column(
+            Box(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 28.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center,
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 28.dp, vertical = 18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                 Text(
                     text = "What should we build in",
                     style = MaterialTheme.typography.headlineMedium,
@@ -207,6 +211,7 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                 if (state.projects.isEmpty()) {
                     Spacer(Modifier.height(20.dp))
                     ErrorBanner(message = "No projects are available on this server yet.")
+                }
                 }
             }
 

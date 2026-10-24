@@ -387,6 +387,7 @@ fun threadStatus(thread: ThreadShell?): StatusInfo {
         thread.pendingRuntimeRequest != null -> StatusInfo("Needs you", StatusTone.Attention)
         thread.activeRunId != null || thread.status == "running" -> StatusInfo("Working", StatusTone.Active)
         thread.isArchived -> StatusInfo("Archived", StatusTone.Neutral)
+        thread.settledAt != null -> StatusInfo("Done", StatusTone.Neutral)
         else -> StatusInfo("Ready", StatusTone.Neutral)
     }
 }

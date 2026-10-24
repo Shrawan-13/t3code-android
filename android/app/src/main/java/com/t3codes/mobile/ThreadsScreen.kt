@@ -84,14 +84,18 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
         matchesProject && matchesSearch
     }
     val pinned = filtered.filter { it.pinnedAt != null }
-    val chats = filtered.filter { it.pinnedAt == null }
-    val archived = state.archivedThreads.filter { thread ->
-        val matchesProject = state.projectFilter == null || thread.projectId == state.projectFilter
-        val matchesSearch = query.isEmpty() ||
-            thread.title.contains(query, ignoreCase = true) ||
-            thread.latestVisibleMessage?.text?.contains(query, ignoreCase = true) == true
-        matchesProject && matchesSearch
-    }
+    val chats = filtered.filter { it.pinnedAt == null && it.settledAt == null && !it.isArchived }
+    val settled = (
+        filtered.filter { it.settledAt != null || it.isArchived } +
+            state.archivedThreads.filter { thread ->
+                val matchesProject = state.projectFilter == null ||
+                    thread.projectId == state.projectFilter
+                val matchesSearch = query.isEmpty() ||
+                    thread.title.contains(query, ignoreCase = true) ||
+                    thread.latestVisibleMessage?.text?.contains(query, ignoreCase = true) == true
+                matchesProject && matchesSearch
+            }
+        ).distinctBy { it.id }
     val selectedProject = state.projectFilter?.let { projectsById[it] }
     val filterCount = listOf(
         state.projectFilter != null,
@@ -193,7 +197,7 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                 }
             }
 
-            if (filtered.isEmpty() && archived.isEmpty()) {
+            if (filtered.isEmpty() && settled.isEmpty()) {
                 item {
                     EmptyState(
                         icon = Icons.Rounded.Forum,
@@ -224,11 +228,11 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                 }
             }
 
-            if (archived.isNotEmpty()) {
+            if (settled.isNotEmpty()) {
                 item {
                     ChatSectionLabel(
                         text = "Settled",
-                        count = archived.size,
+                        count = settled.size,
                         trailing = {
                             TextButton(onClick = viewModel::toggleArchived) {
                                 Text(if (state.showArchived) "Hide" else "Show")
@@ -239,7 +243,7 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                 if (state.showArchived) {
                     item {
                         ThreadGroup(
-                            threads = archived,
+                            threads = settled,
                             projects = projectsById,
                             archived = true,
                             onOpen = viewModel::openThread,
@@ -571,17 +575,18 @@ private fun ThreadRow(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val status = threadStatus(thread)
+    val settled = archived || thread.settledAt != null || thread.isArchived
     val projectTitle = project?.title?.ifBlank { project.workspaceRoot.substringAfterLast('/') }
         ?: "Project"
     val rightLabel = when {
-        archived -> "Done"
+        settled -> "Done"
         status.tone == StatusTone.Error -> "Error"
         status.tone == StatusTone.Attention -> "Needs you"
         status.tone == StatusTone.Active -> "Working"
         else -> relativeTime(thread.updatedAt.ifEmpty { thread.createdAt })
     }
     val rightColor = when {
-        archived -> MaterialTheme.colorScheme.tertiary
+        settled -> MaterialTheme.colorScheme.tertiary
         status.tone == StatusTone.Error -> MaterialTheme.colorScheme.error
         status.tone == StatusTone.Attention -> MaterialTheme.colorScheme.tertiary
         status.tone == StatusTone.Active -> MaterialTheme.colorScheme.primary
@@ -634,7 +639,8 @@ private fun ThreadRow(
             Row(verticalAlignment = Alignment.Top) {
                 Text(
                     text = thread.title.ifBlank { "Untitled thread" },
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -683,11 +689,11 @@ private fun ThreadRow(
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text(if (archived) "Unarchive" else "Archive") },
+                    text = { Text(if (thread.isArchived) "Unarchive" else "Archive") },
                     leadingIcon = { Icon(Icons.Rounded.Archive, contentDescription = null) },
                     onClick = {
                         menuOpen = false
-                        onAction(if (archived) "unarchive" else "archive", "")
+                        onAction(if (thread.isArchived) "unarchive" else "archive", "")
                     },
                 )
                 DropdownMenuItem(
