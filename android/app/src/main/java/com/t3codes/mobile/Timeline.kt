@@ -43,26 +43,41 @@ data class TimelineEntry(
     val attachmentCount: Int = 0,
 )
 
-fun ThreadProjection.timeline(older: List<VisibleTurnItem> = emptyList()): List<TimelineEntry> {
-    val visible = older + visibleTurnItems
-    if (visible.isNotEmpty()) {
-        return visible.mapIndexedNotNull { index, value -> value.item.toEntry(index) }
-    }
-    return messages.mapIndexedNotNull { index, message ->
-        if (message.text.isBlank()) return@mapIndexedNotNull null
-        TimelineEntry(
-            key = "message-${message.id.ifEmpty { index.toString() }}",
-            kind = if (message.role == "user") TimelineKind.User else TimelineKind.Assistant,
-            item = TurnItem(
-                id = message.id,
-                type = if (message.role == "user") "user_message" else "assistant_message",
+fun ThreadProjection.timeline(
+    older: List<VisibleTurnItem> = emptyList(),
+    pending: List<VisibleTurnItem> = emptyList(),
+): List<TimelineEntry> {
+    val base = if (older.isNotEmpty() || visibleTurnItems.isNotEmpty()) {
+        (older + visibleTurnItems).mapIndexedNotNull { index, value -> value.item.toEntry(index) }
+    } else {
+        messages.mapIndexedNotNull { index, message ->
+            if (message.text.isBlank()) return@mapIndexedNotNull null
+            TimelineEntry(
+                key = "message-${message.id.ifEmpty { index.toString() }}",
+                kind = if (message.role == "user") TimelineKind.User else TimelineKind.Assistant,
+                item = TurnItem(
+                    id = message.id,
+                    type = if (message.role == "user") "user_message" else "assistant_message",
+                    text = message.text,
+                    attachments = message.attachments,
+                ),
                 text = message.text,
-                attachments = message.attachments,
-            ),
-            text = message.text,
-            attachmentCount = message.attachments.size,
-        )
+                attachmentCount = message.attachments.size,
+            )
+        }
     }
+    return base + pending.mapIndexedNotNull { index, value -> value.item.toEntry(base.size + index) }
+}
+
+private val unfinishedRunStatuses = setOf("preparing", "queued", "starting", "running", "waiting")
+
+/** True while the projection still has an unfinished run. */
+fun ThreadProjection.isRunning(): Boolean = runs.any { run ->
+    val status = (run as? JsonObject)
+        ?.get("status")
+        ?.let { (it as? JsonPrimitive)?.contentOrNull }
+        .orEmpty()
+    status in unfinishedRunStatuses
 }
 
 private fun TurnItem.toEntry(index: Int): TimelineEntry? {

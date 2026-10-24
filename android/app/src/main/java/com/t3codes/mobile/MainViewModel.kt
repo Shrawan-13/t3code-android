@@ -5,6 +5,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -24,23 +25,28 @@ import com.t3codes.core.T3Connection
 import com.t3codes.core.T3Core
 import com.t3codes.core.T3Exception
 import com.t3codes.core.TerminalFeed
+import com.t3codes.core.ThreadDetailSnapshot
 import com.t3codes.core.ThreadFeed
 import com.t3codes.core.ThreadProjection
 import com.t3codes.core.ThreadShell
+import com.t3codes.core.TurnItem
 import com.t3codes.core.UsageSummary
 import com.t3codes.core.VisibleTurnItem
 import com.t3codes.core.WorkspaceStrategy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.encodeToJsonElement
 import java.time.LocalDate
 import java.time.ZoneId
+import java.util.UUID
 
 enum class AppTab(val label: String) {
     Threads("Threads"),
@@ -62,6 +68,9 @@ data class ThreadUi(
     val hasMoreHistory: Boolean = false,
     val historyCursor: String? = null,
     val loadingEarlier: Boolean = false,
+    val sequence: Long = 0,
+    val live: Boolean = false,
+    val pendingUserItems: List<VisibleTurnItem> = emptyList(),
 )
 
 data class UsageUi(
@@ -155,6 +164,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var shellJob: Job? = null
     private var threadFeed: ThreadFeed? = null
     private var threadJob: Job? = null
+    private var threadReconcileJob: Job? = null
     private var terminalFeed: TerminalFeed? = null
     private var terminalJob: Job? = null
     private var diffJob: Job? = null
@@ -402,46 +412,131 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val conn = connection ?: return@launch
             var feed: ThreadFeed? = null
             try {
-                val detail = withContext(Dispatchers.IO) { conn.thread(threadId) }
-                if (!isActive || state.activeThreadId != threadId) return@launch
-                state = state.copy(
-                    thread = ThreadUi(
-                        threadId = threadId,
-                        projection = detail.projection,
-                        summary = state.summaryFor(threadId) ?: summary,
-                        loading = false,
-                        hasMoreHistory = detail.hasMoreHistory == true,
-                        historyCursor = detail.historyCursor,
-                    ),
-                )
-                runCatching {
-                    withContext(Dispatchers.IO) { conn.threadAction(threadId, "markRead") }
-                }
-                val next = withContext(Dispatchers.IO) {
-                    conn.watchThread(threadId, detail.snapshotSequence, false)
-                }
-                if (!isActive || state.activeThreadId != threadId) {
-                    runCatching { next.close() }
-                    return@launch
-                }
-                feed = next
-                threadFeed = next
-                next.events.collect {
-                    val snapshot = withContext(Dispatchers.IO) {
-                        runCatching { next.state() }.getOrNull()
-                    } ?: return@collect
-                    if (state.activeThreadId != threadId) return@collect
-                    val current = state.thread ?: return@collect
-                    state = state.copy(
-                        thread = current.copy(
-                            projection = snapshot.projection,
-                            summary = state.summaryFor(threadId) ?: current.summary,
-                            loading = false,
-                            error = null,
-                            hasMoreHistory = current.hasMoreHistory || snapshot.hasMoreHistory,
-                            historyCursor = snapshot.historyCursor ?: current.historyCursor,
-                        ),
-                    )
+                while (isActive && state.activeThreadId == threadId) {
+                    // Always start from a full snapshot. It fills the screen on
+                    // first open and catches up on anything missed when a live
+                    // subscription had to be replaced.
+                    val detail = withContext(Dispatchers.IO) { conn.thread(threadId) }
+                    if (!isActive || state.activeThreadId != threadId) return@launch
+                    applyThreadDetail(threadId, detail)
+                    if (state.thread?.threadId == threadId) {
+                        runCatching {
+                            withContext(Dispatchers.IO) { conn.threadAction(threadId, "markRead") }
+                        }
+                    }
+                    val next = try {
+                        withContext(Dispatchers.IO) {
+                            conn.watchThread(threadId, detail.snapshotSequence, false)
+                        }
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        Log.w(LOG_TAG, "thread subscribe failed for $threadId", error)
+                        if (state.activeThreadId == threadId) {
+                            state = state.copy(
+                                thread = state.thread?.copy(
+                                    loading = false,
+                                    live = false,
+                                    error = "Live updates unavailable: ${describe(error)}",
+                                ),
+                            )
+                        }
+                        delay(1_000)
+                        continue
+                    }
+                    if (!isActive || state.activeThreadId != threadId) {
+                        runCatching { next.close() }
+                        return@launch
+                    }
+                    feed = next
+                    threadFeed = next
+                    setThreadLive(threadId, true)
+                    Log.d(LOG_TAG, "thread feed open $threadId after=${detail.snapshotSequence}")
+
+                    var stateFailures = 0
+                    var eventCount = 0
+                    try {
+                        next.events.collect { event ->
+                            if (!isActive || state.activeThreadId != threadId) return@collect
+                            eventCount++
+                            if (eventCount <= 5 || event.kind != "event") {
+                                Log.d(
+                                    LOG_TAG,
+                                    "thread event ${event.kind} seq=${event.sequence} " +
+                                        "event#$eventCount id=$threadId",
+                                )
+                            }
+                            event.snapshot?.let { snapshot ->
+                                if (snapshot.projection.thread.id == threadId) {
+                                    applyThreadProjection(
+                                        threadId,
+                                        snapshot.projection,
+                                        snapshot.sequence,
+                                    )
+                                }
+                            }
+                            event.event?.let { domainEvent ->
+                                val current = state.thread
+                                    ?.takeIf { it.threadId == threadId }
+                                    ?.projection
+                                    ?: return@let
+                                applyThreadProjection(
+                                    threadId,
+                                    current.applyDomainEvent(domainEvent),
+                                    event.sequence,
+                                )
+                            }
+
+                            val snapshot = withContext(Dispatchers.IO) {
+                                runCatching { next.state() }
+                                    .onFailure {
+                                        Log.w(LOG_TAG, "thread state failed for $threadId", it)
+                                    }
+                                    .getOrNull()
+                            }
+                            if (snapshot != null && snapshot.projection.thread.id == threadId) {
+                                stateFailures = 0
+                                applyThreadProjection(
+                                    threadId,
+                                    snapshot.projection,
+                                    maxOf(event.sequence, snapshot.sequence),
+                                )
+                            } else {
+                                stateFailures++
+                                if (stateFailures == 1 || stateFailures % 25 == 0) {
+                                    Log.w(
+                                        LOG_TAG,
+                                        "thread state unusable for $threadId " +
+                                            "(seq=${snapshot?.sequence}, " +
+                                            "id=${snapshot?.projection?.thread?.id}) " +
+                                            "failures=$stateFailures",
+                                    )
+                                }
+                                scheduleThreadReconcile(conn, threadId)
+                            }
+                        }
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        Log.w(LOG_TAG, "thread feed failed for $threadId", error)
+                        if (state.activeThreadId == threadId) {
+                            state = state.copy(
+                                thread = state.thread?.copy(
+                                    live = false,
+                                    error = "Live updates paused: ${describe(error)}",
+                                ),
+                            )
+                        }
+                    } finally {
+                        setThreadLive(threadId, false)
+                        if (threadFeed === feed) threadFeed = null
+                        runCatching { feed?.close() }
+                        feed = null
+                    }
+
+                    if (!isActive || state.activeThreadId != threadId) return@launch
+                    Log.d(LOG_TAG, "thread feed ended, reconnecting $threadId")
+                    delay(1_000)
                 }
             } catch (error: CancellationException) {
                 throw error
@@ -454,7 +549,85 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 runCatching { feed?.close() }
                 if (threadFeed === feed) threadFeed = null
+                threadReconcileJob?.cancel()
+                threadReconcileJob = null
             }
+        }
+    }
+
+    fun refreshThread() {
+        val threadId = state.activeThreadId ?: return
+        val conn = connection ?: return
+        viewModelScope.launch {
+            try {
+                val detail = withContext(Dispatchers.IO) { conn.thread(threadId) }
+                if (state.activeThreadId == threadId) applyThreadDetail(threadId, detail)
+            } catch (error: Throwable) {
+                toast(describe(error))
+            }
+        }
+    }
+
+    private fun applyThreadDetail(threadId: String, detail: ThreadDetailSnapshot) {
+        val current = state.thread ?: return
+        if (current.threadId != threadId || state.activeThreadId != threadId) return
+        applyThreadProjection(threadId, detail.projection, detail.snapshotSequence) { latest ->
+            latest.copy(
+                hasMoreHistory = latest.hasMoreHistory || detail.hasMoreHistory == true,
+                historyCursor = detail.historyCursor ?: latest.historyCursor,
+            )
+        }
+    }
+
+    private fun applyThreadProjection(
+        threadId: String,
+        projection: ThreadProjection,
+        sequence: Long,
+        extra: (ThreadUi) -> ThreadUi = { it },
+    ) {
+        val current = state.thread ?: return
+        if (current.threadId != threadId || state.activeThreadId != threadId) return
+        val hasContent = projection.thread.id.isNotEmpty() ||
+            projection.messages.isNotEmpty() ||
+            projection.visibleTurnItems.isNotEmpty()
+        if (!hasContent) return
+        val pending = current.pendingUserItems.filterNot { pendingItem ->
+            val text = pendingItem.item.text.trim()
+            val inTimeline = projection.visibleTurnItems.any { row ->
+                row.item.type == "user_message" &&
+                    (text.isEmpty() || row.item.text.trim() == text)
+            }
+            val inMessages = projection.messages.any { message ->
+                message.role == "user" && (text.isEmpty() || message.text.trim() == text)
+            }
+            if (projection.visibleTurnItems.isNotEmpty()) inTimeline else inMessages
+        }
+        val latest = current.copy(
+            projection = projection,
+            summary = state.summaryFor(threadId) ?: current.summary,
+            loading = false,
+            error = null,
+            sequence = maxOf(current.sequence, sequence),
+            pendingUserItems = pending,
+        )
+        state = state.copy(thread = extra(latest))
+    }
+
+    private fun setThreadLive(threadId: String, live: Boolean) {
+        val current = state.thread ?: return
+        if (current.threadId == threadId && current.live != live) {
+            state = state.copy(thread = current.copy(live = live))
+        }
+    }
+
+    private fun scheduleThreadReconcile(conn: T3Connection, threadId: String) {
+        if (threadReconcileJob?.isActive == true) return
+        threadReconcileJob = viewModelScope.launch {
+            delay(350)
+            val detail = withContext(Dispatchers.IO) {
+                runCatching { conn.thread(threadId) }.getOrNull()
+            } ?: return@launch
+            if (state.activeThreadId == threadId) applyThreadDetail(threadId, detail)
         }
     }
 
@@ -463,6 +636,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         threadJob = null
         threadFeed?.close()
         threadFeed = null
+        threadReconcileJob?.cancel()
+        threadReconcileJob = null
         state = state.copy(activeThreadId = null, thread = null)
     }
 
@@ -510,8 +685,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (trimmed.isEmpty() && current.pendingAttachments.isEmpty()) return
         val running = current.projection.thread.activeRunId != null ||
             current.summary?.activeRunId != null ||
-            current.projection.thread.status == "running"
-        state = state.copy(thread = current.copy(sending = true, error = null))
+            current.projection.thread.status == "running" ||
+            current.projection.isRunning()
+        val pendingId = "local:${UUID.randomUUID()}"
+        val ordinal = (current.projection.turnItems.maxOfOrNull { it.ordinal } ?: 0) +
+            current.pendingUserItems.size + 1
+        val pending = VisibleTurnItem(
+            position = current.projection.visibleTurnItems.size + current.pendingUserItems.size,
+            visibility = "local",
+            sourceItemId = pendingId,
+            sourceThreadId = current.threadId,
+            item = TurnItem(
+                id = pendingId,
+                threadId = current.threadId,
+                ordinal = ordinal,
+                status = "pending",
+                type = "user_message",
+                text = trimmed,
+                attachments = current.pendingAttachments.map { T3Core.json.encodeToJsonElement(it) },
+            ),
+        )
+        state = state.copy(
+            thread = current.copy(
+                sending = true,
+                error = null,
+                pendingUserItems = current.pendingUserItems + pending,
+            ),
+        )
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -535,7 +735,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val latest = state.thread
                 if (latest?.threadId == current.threadId) {
                     state = state.copy(
-                        thread = latest.copy(sending = false, error = describe(error)),
+                        thread = latest.copy(
+                            sending = false,
+                            error = describe(error),
+                            pendingUserItems = latest.pendingUserItems.filterNot {
+                                it.sourceItemId == pendingId
+                            },
+                        ),
                     )
                 }
             }
@@ -1054,6 +1260,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         threadJob = null
         threadFeed?.close()
         threadFeed = null
+        threadReconcileJob?.cancel()
+        threadReconcileJob = null
         terminalJob?.cancel()
         terminalJob = null
         terminalFeed?.close()
@@ -1108,6 +1316,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private companion object {
+        const val LOG_TAG = "T3Live"
         const val KEY_BASE = "base_url"
         const val KEY_TOKEN = "token"
         const val KEY_THEME = "theme_pref"

@@ -45,6 +45,7 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PushPin
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
@@ -75,6 +76,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -89,6 +91,7 @@ import com.t3codes.core.Project
 import com.t3codes.core.RuntimeRequest
 import com.t3codes.core.T3Core
 import com.t3codes.core.ThreadShell
+import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -105,12 +108,13 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
     val effective = if (projection.thread.id.isNotEmpty()) projection.thread else summary
     val status = threadStatus(effective)
     val project = state.projectFor(effective ?: summary)
-    val rows = remember(projection.visibleTurnItems, thread.olderItems) {
-        projection.timeline(thread.olderItems)
+    val rows = remember(projection.visibleTurnItems, thread.olderItems, thread.pendingUserItems) {
+        projection.timeline(thread.olderItems, thread.pendingUserItems)
     }
     val running = projection.thread.activeRunId != null ||
         summary?.activeRunId != null ||
-        projection.thread.status == "running"
+        projection.thread.status == "running" ||
+        projection.isRunning()
     val title = effective?.title?.ifBlank { "Untitled thread" }
         ?: summary?.title?.ifBlank { "Untitled thread" }
         ?: "Thread"
@@ -165,6 +169,13 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                                 style = MaterialTheme.typography.labelSmall,
                                 color = statusToneColor(status.tone),
                             )
+                            if (!thread.live && !thread.loading) {
+                                Text(
+                                    text = "· syncing",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                )
+                            }
                             Text(
                                 text = "· $projectTitle",
                                 style = MaterialTheme.typography.labelSmall,
@@ -182,6 +193,14 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                             Icon(Icons.Rounded.MoreVert, contentDescription = "Thread actions")
                         }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Refresh thread") },
+                                leadingIcon = { Icon(Icons.Rounded.Refresh, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    viewModel.refreshThread()
+                                },
+                            )
                             DropdownMenuItem(
                                 text = { Text("Review changes") },
                                 leadingIcon = { Icon(Icons.Rounded.Difference, contentDescription = null) },
@@ -530,14 +549,34 @@ private fun TimelineContent(
         }
     }
     var initialScrollDone by remember(thread.threadId) { mutableStateOf(false) }
-    LaunchedEffect(thread.threadId, thread.loading, itemCount) {
-        if (!initialScrollDone && itemCount > 0) {
-            listState.scrollToItem(itemCount - 1)
-            initialScrollDone = true
+    var followTail by remember(thread.threadId) { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress to atBottom }.collect { (scrolling, bottom) ->
+            if (bottom) followTail = true
+            else if (scrolling) followTail = false
         }
     }
-    LaunchedEffect(rows.size, rows.lastOrNull()?.text, rows.lastOrNull()?.output, running) {
-        if (initialScrollDone && atBottom && itemCount > 0) {
+    LaunchedEffect(thread.threadId, thread.loading, itemCount) {
+        if (!initialScrollDone && itemCount > 0 && !thread.loading) {
+            listState.scrollToItem(itemCount - 1)
+            initialScrollDone = true
+            followTail = true
+        }
+    }
+    LaunchedEffect(thread.pendingUserItems.size, thread.sending) {
+        if (thread.pendingUserItems.isNotEmpty()) {
+            followTail = true
+            if (itemCount > 0) listState.scrollToItem(itemCount - 1)
+        }
+    }
+    LaunchedEffect(
+        itemCount,
+        rows.lastOrNull()?.key,
+        rows.lastOrNull()?.text,
+        rows.lastOrNull()?.output,
+        running,
+    ) {
+        if (initialScrollDone && followTail && itemCount > 0) {
             listState.scrollToItem(itemCount - 1)
         }
     }
