@@ -28,17 +28,18 @@ All releases:
 ## Features
 
 - Auto-connect with saved token, device pairing, and connection diagnostics
-- Grouped, searchable thread list with project filters, pin, rename, archive,
-  delete, and mark read/unread
-- Live thread timeline: Markdown, reasoning, commands, tool calls, file changes,
-  approvals, interrupts, and pull requests
+- Chats home with settled-thread shelves, project filters, search, pin, rename,
+  archive, delete, and mark read/unread
+- Pull-requests list with open/merged/closed filters and direct links to GitHub
+- Live thread timeline: Markdown, compact tool calls grouped into collapsible
+  work logs, reasoning, commands, file changes, approvals, interrupts, and PRs
 - Composer with image/file attachments, send, queue while running, stop, and
   in-thread model switching
 - Per-thread run permissions (ask first, auto-accept edits, auto, full access)
   and plan mode
 - Project browser, usage dashboard with charts, provider list, and self-test
 - Terminal, workspace file browser, and diff viewer
-- Material 3 theme with custom violet palette and system/light/dark modes
+- Material 3 theme with a T3-style rose-on-violet palette and system/light/dark modes
 
 ## Native core
 

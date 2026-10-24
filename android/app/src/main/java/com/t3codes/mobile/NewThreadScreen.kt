@@ -421,10 +421,10 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                             },
                             enabled = canStart,
                             shape = CircleShape,
-                            color = if (canStart) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainerHighest
+                            color = when {
+                                state.launching -> MaterialTheme.colorScheme.primaryContainer
+                                canStart -> MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.surfaceContainerHighest
                             },
                             modifier = Modifier.size(42.dp),
                         ) {
@@ -433,7 +433,7 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                                     CircularProgressIndicator(
                                         modifier = Modifier.size(18.dp),
                                         strokeWidth = 2.dp,
-                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                                     )
                                 } else {
                                     Icon(
