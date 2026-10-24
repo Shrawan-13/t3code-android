@@ -160,7 +160,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var diffJob: Job? = null
     private var filesJob: Job? = null
     private var usageJob: Job? = null
-    private var actionJob: Job? = null
 
     var state by mutableStateOf(
         UiState(
@@ -326,7 +325,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                toast("Live updates stopped: ${describe(error)}")
+                if (state.config != null) toast("Live updates stopped: ${describe(error)}")
             } finally {
                 runCatching { feed.close() }
             }
@@ -558,8 +557,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun threadAction(threadId: String, action: String, value: String = "") {
         val conn = connection ?: return
-        actionJob?.cancel()
-        actionJob = viewModelScope.launch {
+        viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { conn.threadAction(threadId, action, value) }
                 when (action) {
@@ -716,7 +714,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openTerminal(threadId: String) {
         val conn = connection ?: return
-        val cwd = resolveCwd(threadId) ?: return
+        val cwd = resolveCwd(threadId) ?: run {
+            toast("This thread has no workspace path.")
+            return
+        }
         closeTerminal()
         state = state.copy(terminal = TerminalUi(threadId = threadId, cwd = cwd))
         terminalJob = viewModelScope.launch {
@@ -815,7 +816,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openDiff(threadId: String) {
         val conn = connection ?: return
-        val cwd = resolveCwd(threadId) ?: return
+        val cwd = resolveCwd(threadId) ?: run {
+            toast("This thread has no workspace path.")
+            return
+        }
         diffJob?.cancel()
         state = state.copy(diff = DiffUi(threadId = threadId, cwd = cwd, loading = true))
         diffJob = viewModelScope.launch {
@@ -858,7 +862,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ---------------------------------------------------------------------- files
 
     fun openFiles(threadId: String) {
-        val cwd = resolveCwd(threadId) ?: return
+        val cwd = resolveCwd(threadId) ?: run {
+            toast("This thread has no workspace path.")
+            return
+        }
         filesJob?.cancel()
         state = state.copy(
             files = FilesUi(threadId = threadId, cwd = cwd, directory = "", loading = true),
@@ -1023,8 +1030,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         filesJob = null
         usageJob?.cancel()
         usageJob = null
-        actionJob?.cancel()
-        actionJob = null
         connection?.close()
         connection = null
     }
