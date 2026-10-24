@@ -23,13 +23,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.Plus
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -323,7 +323,7 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                             modifier = Modifier.size(38.dp),
                         ) {
                             Icon(
-                                Icons.Rounded.Plus,
+                                Icons.Rounded.Add,
                                 contentDescription = "Add attachment",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
