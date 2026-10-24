@@ -1350,12 +1350,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }.getOrNull()
 
-    private fun describe(error: Throwable): String = when (error) {
-        is T3Exception ->
-            if (error.tag.isNullOrEmpty()) error.message ?: "request failed"
-            else "${error.message} (${error.tag})"
-        is UnsatisfiedLinkError -> "This build only ships the arm64-v8a core (${error.message})."
-        else -> error.message ?: error.javaClass.simpleName
+    private fun describe(error: Throwable): String {
+        val raw = when (error) {
+            is T3Exception ->
+                if (error.tag.isNullOrEmpty()) error.message ?: "request failed"
+                else "${error.message} (${error.tag})"
+            is UnsatisfiedLinkError -> "This build only ships the arm64-v8a core (${error.message})."
+            else -> error.message ?: error.javaClass.simpleName
+        }
+        if (!raw.startsWith("server defect", ignoreCase = true)) {
+            return raw.lineSequence().firstOrNull()?.trim().orEmpty().let {
+                if (it.length > 280) it.take(280).trimEnd() + "…" else it
+            }.ifBlank { "request failed" }
+        }
+        Log.w(LOG_TAG, "server rejected an action: $raw")
+        return if (raw.contains("Expected")) {
+            "The server rejected this action. Update the app or the T3 server and try again."
+        } else {
+            raw.lineSequence().firstOrNull()?.trim().orEmpty().ifBlank { "The server rejected this action." }
+        }
     }
 
     private companion object {
