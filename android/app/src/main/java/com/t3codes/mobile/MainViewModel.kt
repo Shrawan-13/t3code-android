@@ -457,9 +457,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     var stateFailures = 0
                     var eventCount = 0
                     var lastStateAt = 0L
+                    var lastEventAt = SystemClock.elapsedRealtime()
+                    // If a subscription is open but silent (proxy, server or
+                    // mobile network hiccup), catch up while work is active.
+                    val watchdog = launch {
+                        while (isActive) {
+                            delay(5_000)
+                            val current = state.thread?.takeIf { it.threadId == threadId }
+                                ?: return@launch
+                            val active = current.pendingUserItems.isNotEmpty() ||
+                                current.projection.isRunning() ||
+                                current.summary?.activeRunId != null
+                            if (active &&
+                                SystemClock.elapsedRealtime() - lastEventAt >= 4_500L
+                            ) {
+                                Log.d(LOG_TAG, "thread watchdog refresh $threadId")
+                                val catchUp = withContext(Dispatchers.IO) {
+                                    runCatching { conn.thread(threadId) }.getOrNull()
+                                }
+                                if (catchUp != null) applyThreadDetail(threadId, catchUp)
+                            }
+                        }
+                    }
                     try {
                         next.events.collect { event ->
                             if (!isActive || state.activeThreadId != threadId) return@collect
+                            lastEventAt = SystemClock.elapsedRealtime()
                             eventCount++
                             if (eventCount <= 5 || event.kind != "event") {
                                 Log.d(
@@ -542,6 +565,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         }
                     } finally {
+                        watchdog.cancel()
                         setThreadLive(threadId, false)
                         if (threadFeed === feed) threadFeed = null
                         runCatching { feed?.close() }
