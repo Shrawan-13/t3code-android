@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.compose.runtime.getValue
@@ -455,6 +456,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                     var stateFailures = 0
                     var eventCount = 0
+                    var lastStateAt = 0L
                     try {
                         next.events.collect { event ->
                             if (!isActive || state.activeThreadId != threadId) return@collect
@@ -475,6 +477,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     )
                                 }
                             }
+                            val eventType = event.event.domainEventType()
                             event.event?.let { domainEvent ->
                                 val current = state.thread
                                     ?.takeIf { it.threadId == threadId }
@@ -487,32 +490,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 )
                             }
 
-                            val snapshot = withContext(Dispatchers.IO) {
-                                runCatching { next.state() }
-                                    .onFailure {
-                                        Log.w(LOG_TAG, "thread state failed for $threadId", it)
-                                    }
-                                    .getOrNull()
-                            }
-                            if (snapshot != null && snapshot.projection.thread.id == threadId) {
-                                stateFailures = 0
-                                applyThreadProjection(
-                                    threadId,
-                                    snapshot.projection,
-                                    maxOf(event.sequence, snapshot.sequence),
-                                )
-                            } else {
-                                stateFailures++
-                                if (stateFailures == 1 || stateFailures % 25 == 0) {
-                                    Log.w(
-                                        LOG_TAG,
-                                        "thread state unusable for $threadId " +
-                                            "(seq=${snapshot?.sequence}, " +
-                                            "id=${snapshot?.projection?.thread?.id}) " +
-                                            "failures=$stateFailures",
-                                    )
+                            // Token-sized turn updates are already applied from
+                            // their payloads above. Reading the whole projection
+                            // for every token is expensive on long threads, so
+                            // reconcile with the authoritative state at most
+                            // a few times per second.
+                            val now = SystemClock.elapsedRealtime()
+                            val tokenUpdate = eventType == "turn-item.updated" ||
+                                eventType == "message.updated"
+                            if (!tokenUpdate || now - lastStateAt >= 750L) {
+                                lastStateAt = now
+                                val snapshot = withContext(Dispatchers.IO) {
+                                    runCatching { next.state() }
+                                        .onFailure {
+                                            Log.w(LOG_TAG, "thread state failed for $threadId", it)
+                                        }
+                                        .getOrNull()
                                 }
-                                scheduleThreadReconcile(conn, threadId)
+                                if (snapshot != null && snapshot.projection.thread.id == threadId) {
+                                    stateFailures = 0
+                                    applyThreadProjection(
+                                        threadId,
+                                        snapshot.projection,
+                                        maxOf(event.sequence, snapshot.sequence),
+                                    )
+                                } else {
+                                    stateFailures++
+                                    if (stateFailures == 1 || stateFailures % 25 == 0) {
+                                        Log.w(
+                                            LOG_TAG,
+                                            "thread state unusable for $threadId " +
+                                                "(seq=${snapshot?.sequence}, " +
+                                                "id=${snapshot?.projection?.thread?.id}) " +
+                                                "failures=$stateFailures",
+                                        )
+                                    }
+                                    scheduleThreadReconcile(conn, threadId)
+                                }
                             }
                         }
                     } catch (error: CancellationException) {

@@ -21,6 +21,9 @@ import kotlinx.serialization.json.decodeFromJsonElement
  * JSON response is temporarily unreadable: the event payloads themselves are
  * enough to append user messages, stream assistant text and expose approvals.
  */
+fun JsonElement?.domainEventType(): String =
+    ((this as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull.orEmpty()
+
 fun ThreadProjection.applyDomainEvent(event: JsonElement?): ThreadProjection {
     val envelope = event as? JsonObject ?: return this
     val type = envelope.string("type")
