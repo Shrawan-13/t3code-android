@@ -110,6 +110,7 @@ import kotlinx.serialization.json.intOrNull
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
+    val uriHandler = LocalUriHandler.current
     val thread = state.thread ?: return
     val summary = thread.summary ?: state.summaryFor(thread.threadId)
     val projection = thread.projection
@@ -407,6 +408,22 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                             running = running,
                             pullRequests = pullRequests,
                             onLoadEarlier = viewModel::loadEarlier,
+                            onOpenPullRequest = { pullRequest ->
+                                val projectId = effective?.projectId.orEmpty()
+                                if (projectId.isBlank()) {
+                                    if (pullRequest.url.isNotBlank()) {
+                                        uriHandler.openUri(pullRequest.url)
+                                    }
+                                } else {
+                                    viewModel.openPullRequestFromThread(
+                                        url = pullRequest.url,
+                                        projectId = projectId,
+                                        title = pullRequest.title,
+                                        stateName = pullRequest.state,
+                                        number = pullRequest.number,
+                                    )
+                                }
+                            },
                         )
                     }
                 }
@@ -526,6 +543,7 @@ private fun TimelineContent(
     running: Boolean,
     pullRequests: List<PullRequestInfo>,
     onLoadEarlier: () -> Unit,
+    onOpenPullRequest: (PullRequestInfo) -> Unit,
 ) {
     val listState = rememberLazyListState()
     val blocks = remember(rows) { groupTimeline(rows) }
@@ -597,7 +615,7 @@ private fun TimelineContent(
             }
         }
         items(pullRequests) { pullRequest ->
-            PullRequestCard(pullRequest)
+            PullRequestCard(pullRequest, onOpen = { onOpenPullRequest(pullRequest) })
         }
         items(blocks, key = { it.key }) { block ->
             when (block) {
@@ -696,15 +714,14 @@ private fun UnknownCard(entry: TimelineEntry) {
 }
 
 @Composable
-private fun PullRequestCard(pullRequest: PullRequestInfo) {
-    val uriHandler = LocalUriHandler.current
-    val clickable = pullRequest.url.isNotBlank()
+private fun PullRequestCard(pullRequest: PullRequestInfo, onOpen: () -> Unit) {
+    val clickable = pullRequest.url.isNotBlank() || pullRequest.number != null
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        onClick = { if (clickable) uriHandler.openUri(pullRequest.url) },
+        onClick = { if (clickable) onOpen() },
         enabled = clickable,
     ) {
         Row(

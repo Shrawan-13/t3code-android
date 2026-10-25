@@ -1,6 +1,7 @@
 package com.t3codes.mobile
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Snooze
 import androidx.compose.material.icons.rounded.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -68,6 +70,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.t3codes.core.Project
 import com.t3codes.core.ThreadShell
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.intOrNull
+import java.time.Instant
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,6 +81,8 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
     var renameThread by remember { mutableStateOf<ThreadShell?>(null) }
     var deleteThread by remember { mutableStateOf<ThreadShell?>(null) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
+    var workingExpanded by rememberSaveable { mutableStateOf(true) }
+    var settledVisible by rememberSaveable { mutableStateOf(SETTLED_PAGE_SIZE) }
 
     // Opening the Chats tab (or returning from a thread) should always show
     // what is on the server right now, even if the live feed went silent while
@@ -83,29 +91,43 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
 
     val projectsById = state.projects.associateBy { it.id }
     val query = state.search.trim()
-    val filtered = state.threads.filter { thread ->
+    fun matches(thread: ThreadShell): Boolean {
         val matchesProject = state.projectFilter == null || thread.projectId == state.projectFilter
         val matchesSearch = query.isEmpty() ||
             thread.title.contains(query, ignoreCase = true) ||
             thread.latestVisibleMessage?.text?.contains(query, ignoreCase = true) == true ||
+            thread.branch?.contains(query, ignoreCase = true) == true ||
+            thread.linkedPullRequest?.toString()?.contains(query, ignoreCase = true) == true ||
+            thread.pullRequests.any { it.toString().contains(query, ignoreCase = true) } ||
             projectsById[thread.projectId]?.title?.contains(query, ignoreCase = true) == true
-        matchesProject && matchesSearch
+        return matchesProject && matchesSearch
     }
-    val pinned = filtered.filter { it.pinnedAt != null }
-    val chats = filtered.filter { it.pinnedAt == null && it.settledAt == null && !it.isArchived }
-    val archived = state.archivedThreads.filter { thread ->
-        val matchesProject = state.projectFilter == null ||
-            thread.projectId == state.projectFilter
-        val matchesSearch = query.isEmpty() ||
-            thread.title.contains(query, ignoreCase = true) ||
-            thread.latestVisibleMessage?.text?.contains(query, ignoreCase = true) == true
-        matchesProject && matchesSearch
-    }
+    val filtered = state.threads.filter(::matches)
+    val pinned = filtered
+        .filter { it.pinnedAt != null && it.settledAt == null && !it.isArchived }
+        .sortedWith(compareByDescending<ThreadShell> { it.pinOrderKey ?: it.pinnedAt })
+    val chats = filtered
+        .filter { it.pinnedAt == null && it.settledAt == null && !it.isArchived }
+        .sortedWith(
+            compareByDescending<ThreadShell> { it.latestUserMessageAt ?: it.updatedAt }
+                .thenByDescending { it.createdAt },
+        )
+    val working = chats.filter(::isWorkingThread)
+    val activeChats = chats.filterNot(::isWorkingThread)
+    val archived = state.archivedThreads.filter(::matches)
     val settled = (
-        filtered.filter { it.settledAt != null && !it.isArchived } +
+        filtered.filter { it.settledAt != null && !it.isArchived && it.pinnedAt == null } +
+            filtered.filter { it.settledAt != null && it.pinnedAt != null } +
             if (state.showArchived) archived else emptyList()
-        ).distinctBy { it.id }
+        )
+        .distinctBy { it.id }
+        .sortedWith(
+            compareByDescending<ThreadShell> { it.settledAt ?: it.updatedAt }
+                .thenByDescending { it.createdAt },
+        )
     val selectedProject = state.projectFilter?.let { projectsById[it] }
+    val settledResetKey = "${state.projectFilter.orEmpty()}:$query:${state.showArchived}"
+    LaunchedEffect(settledResetKey) { settledVisible = SETTLED_PAGE_SIZE }
     val filterCount = listOf(
         state.projectFilter != null,
         !state.showSettled,
@@ -121,6 +143,7 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                 if (searchOpen) viewModel.setSearch("")
                 searchOpen = !searchOpen
             },
+            onRefresh = viewModel::refresh,
             onSettings = { viewModel.selectTab(AppTab.Settings) },
         )
 
@@ -202,11 +225,45 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                 }
             }
 
-            if (chats.isNotEmpty()) {
-                item { ChatSectionLabel(if (pinned.isEmpty()) "Chats" else "All chats", chats.size) }
+            if (working.isNotEmpty()) {
+                item {
+                    ChatSectionLabel(
+                        text = "Working",
+                        count = working.size,
+                        trailing = {
+                            TextButton(onClick = { workingExpanded = !workingExpanded }) {
+                                Text(if (workingExpanded) "Hide" else "Show")
+                            }
+                        },
+                    )
+                }
+                if (workingExpanded) {
+                    item {
+                        ThreadGroup(
+                            threads = working,
+                            projects = projectsById,
+                            archived = false,
+                            onOpen = viewModel::openThread,
+                            onAction = { thread, action, value ->
+                                viewModel.threadAction(thread.id, action, value)
+                            },
+                            onRename = { renameThread = it },
+                            onDelete = { deleteThread = it },
+                        )
+                    }
+                }
+            }
+
+            if (activeChats.isNotEmpty()) {
+                item {
+                    ChatSectionLabel(
+                        if (pinned.isEmpty() && working.isEmpty()) "Chats" else "Active",
+                        activeChats.size,
+                    )
+                }
                 item {
                     ThreadGroup(
-                        threads = chats,
+                        threads = activeChats,
                         projects = projectsById,
                         archived = false,
                         onOpen = viewModel::openThread,
@@ -217,9 +274,12 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                 }
             }
 
+            val noThreads = filtered.isEmpty() &&
+                settled.isEmpty() &&
+                (!state.showArchived || archived.isEmpty())
             if (!state.shellLoaded && state.threads.isEmpty() && state.archivedThreads.isEmpty()) {
                 item { WorkingRow("Loading chats from ${state.config?.environment?.label ?: "the machine"}…") }
-            } else if (filtered.isEmpty() && settled.isEmpty()) {
+            } else if (noThreads) {
                 item {
                     EmptyState(
                         icon = Icons.Rounded.Forum,
@@ -263,9 +323,10 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                     )
                 }
                 if (state.showSettled) {
+                    val visibleSettled = settled.take(settledVisible)
                     item {
                         ThreadGroup(
-                            threads = settled,
+                            threads = visibleSettled,
                             projects = projectsById,
                             archived = true,
                             onOpen = viewModel::openThread,
@@ -275,6 +336,16 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                             onRename = { renameThread = it },
                             onDelete = { deleteThread = it },
                         )
+                    }
+                    if (visibleSettled.size < settled.size) {
+                        item {
+                            TextButton(
+                                onClick = { settledVisible += SETTLED_PAGE_SIZE },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Show more (${settled.size - visibleSettled.size})")
+                            }
+                        }
                     }
                 }
             }
@@ -455,6 +526,7 @@ private fun HomeTopBar(
     searchOpen: Boolean,
     filterCount: Int,
     onToggleSearch: () -> Unit,
+    onRefresh: () -> Unit,
     onSettings: () -> Unit,
 ) {
     Row(
@@ -502,6 +574,13 @@ private fun HomeTopBar(
             Icon(
                 if (searchOpen || query.isNotBlank()) Icons.Rounded.Close else Icons.Rounded.Search,
                 contentDescription = if (searchOpen) "Close search" else "Search",
+                modifier = Modifier.size(21.dp),
+            )
+        }
+        IconButton(onClick = onRefresh) {
+            Icon(
+                Icons.Rounded.Refresh,
+                contentDescription = "Refresh chats",
                 modifier = Modifier.size(21.dp),
             )
         }
@@ -633,6 +712,14 @@ private fun ThreadRow(
         status.tone == StatusTone.Active -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val latest = thread.latestVisibleMessage
+    val preview = latest?.text?.replace('\n', ' ')?.trim().orEmpty()
+    val unread = !settled &&
+        latest != null &&
+        latest.role != "user" &&
+        (thread.lastVisitedAt == null || latest.createdAt > (thread.lastVisitedAt ?: ""))
+    val pullRequestNumber = thread.pullRequests.firstNotNullOfOrNull(::pullRequestNumber)
+        ?: pullRequestNumber(thread.linkedPullRequest)
 
     Row(
         modifier = Modifier
@@ -678,15 +765,39 @@ private fun ThreadRow(
             }
             Spacer(Modifier.height(5.dp))
             Row(verticalAlignment = Alignment.Top) {
+                if (unread) {
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 7.dp)
+                            .size(6.dp)
+                            .background(MaterialTheme.colorScheme.primary, CircleShape),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
                 Text(
                     text = thread.title.ifBlank { "Untitled thread" },
                     style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                if (pullRequestNumber != null) {
+                    Spacer(Modifier.width(6.dp))
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                    ) {
+                        Text(
+                            text = "PR #$pullRequestNumber",
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                        )
+                    }
+                }
                 if (thread.pinnedAt != null) {
                     Spacer(Modifier.width(6.dp))
                     Icon(
@@ -698,6 +809,16 @@ private fun ThreadRow(
                         tint = MaterialTheme.colorScheme.primary,
                     )
                 }
+            }
+            if (preview.isNotEmpty()) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = preview,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
         Box {
@@ -745,6 +866,22 @@ private fun ThreadRow(
                     )
                 }
                 DropdownMenuItem(
+                    text = {
+                        Text(
+                            if (thread.snoozedUntil != null) "Unsnooze" else "Snooze for 1 hour",
+                        )
+                    },
+                    leadingIcon = { Icon(Icons.Rounded.Snooze, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        if (thread.snoozedUntil != null) {
+                            onAction("unsnooze", "")
+                        } else {
+                            onAction("snooze", Instant.now().plusSeconds(3_600).toString())
+                        }
+                    },
+                )
+                DropdownMenuItem(
                     text = { Text(if (thread.isArchived) "Unarchive" else "Archive") },
                     leadingIcon = { Icon(Icons.Rounded.Archive, contentDescription = null) },
                     onClick = {
@@ -786,3 +923,13 @@ private fun ThreadRow(
         }
     }
 }
+
+
+private fun isWorkingThread(thread: ThreadShell): Boolean =
+    thread.settledAt == null && (thread.activeRunId != null || thread.status == "running")
+
+private fun pullRequestNumber(element: kotlinx.serialization.json.JsonElement?): Int? =
+    (element as? JsonObject)?.let { (it["number"] as? JsonPrimitive)?.intOrNull }
+
+
+private const val SETTLED_PAGE_SIZE = 8

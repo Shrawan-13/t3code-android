@@ -93,11 +93,14 @@ fun T3App(viewModel: MainViewModel) {
             state.tab != AppTab.Threads &&
             state.tab !in bottomTabs,
     ) { viewModel.selectTab(AppTab.Threads) }
+    // The pull request detail sits above whichever list or thread opened it.
+    BackHandler(enabled = state.pullRequestDetail != null) { viewModel.closePullRequest() }
 
     Box(modifier = Modifier.fillMaxSize()) {
         when {
             !state.connected -> ConnectScreen(state, viewModel)
             state.newThreadOpen -> NewThreadScreen(state, viewModel)
+            state.pullRequestDetail != null -> PullRequestDetailScreen(state, viewModel)
             state.terminal != null -> TerminalScreen(state, viewModel)
             state.diff != null -> DiffScreen(state, viewModel)
             state.files != null -> FilesScreen(state, viewModel)

@@ -252,9 +252,7 @@ fun PullRequestsScreen(state: UiState, viewModel: MainViewModel) {
                     items(filtered, key = { "${it.projectId}-${it.number}" }) { entry ->
                         PullRequestRow(
                             entry = entry,
-                            onOpen = {
-                                if (entry.url.isNotBlank()) uriHandler.openUri(entry.url)
-                            },
+                            onOpen = { viewModel.openPullRequest(entry) },
                         )
                     }
                 }

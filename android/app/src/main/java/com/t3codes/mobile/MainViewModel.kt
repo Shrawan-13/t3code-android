@@ -19,6 +19,8 @@ import com.t3codes.core.Model
 import com.t3codes.core.ModelSelection
 import com.t3codes.core.Project
 import com.t3codes.core.ProjectEntry
+import com.t3codes.core.PullRequestDetail
+import com.t3codes.core.PullRequestDiffResult
 import com.t3codes.core.PullRequestEntry
 import com.t3codes.core.PullRequestListResult
 import com.t3codes.core.PullRequestProjectError
@@ -50,10 +52,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
+import java.net.HttpURLConnection
+import java.net.URI
+import java.net.URL
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -148,6 +154,19 @@ data class PullRequestsUi(
     val loaded: Boolean = false,
 )
 
+data class PullRequestDetailUi(
+    val entry: PullRequestEntry,
+    val detail: PullRequestDetail? = null,
+    val diff: PullRequestDiffResult? = null,
+    val loading: Boolean = true,
+    val diffLoading: Boolean = false,
+    val error: String? = null,
+    val diffError: String? = null,
+    val actionBusy: Boolean = false,
+    val selectedMethod: String = "squash",
+    val tab: String = "overview",
+)
+
 data class UiState(
     val baseUrl: String = "http://127.0.0.1:3773",
     val token: String = "",
@@ -170,6 +189,7 @@ data class UiState(
     val showArchived: Boolean = false,
     val homeFilterOpen: Boolean = false,
     val pullRequests: PullRequestsUi = PullRequestsUi(),
+    val pullRequestDetail: PullRequestDetailUi? = null,
     val activeThreadId: String? = null,
     val thread: ThreadUi? = null,
     val newThreadOpen: Boolean = false,
@@ -199,6 +219,7 @@ data class UiState(
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("t3_connection", Context.MODE_PRIVATE)
+    private val clientCache = ClientCache(application)
 
     @Volatile
     private var connection: T3Connection? = null
@@ -213,6 +234,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var filesJob: Job? = null
     private var usageJob: Job? = null
     private var pullRequestsJob: Job? = null
+    private var pullRequestDetailJob: Job? = null
+    private var pullRequestDiffJob: Job? = null
     private var connectJob: Job? = null
     private var shellRefreshJob: Job? = null
     private var reconnectJob: Job? = null
@@ -220,6 +243,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var branchesJob: Job? = null
     private var reconnectAttempts = 0
     private var lastProviderRefreshAt = 0L
+    private var lastShellCacheAt = 0L
+    private var lastThreadCacheAt = 0L
+    private var cachedEnvironmentId: String? = null
     private var stoppedInBackground = false
 
     var state by mutableStateOf(
@@ -235,7 +261,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         val shouldAutoConnect = prefs.getBoolean(KEY_AUTO, true)
+        if (state.token.isNotBlank()) restoreCachedSession()
         if (shouldAutoConnect && state.token.isNotBlank()) connect()
+    }
+
+    /**
+     * The live socket can take seconds to come up. Restore the last shell and
+     * config immediately so the home screen and the open thread render their
+     * saved contents instead of a blank list while synchronization starts.
+     */
+    private fun restoreCachedSession() {
+        val base = state.baseUrl
+        viewModelScope.launch {
+            val restored = withContext(Dispatchers.IO) { clientCache.loadSession(base) }
+                ?: return@launch
+            if (state.config != null || connection != null) return@launch
+            cachedEnvironmentId = restored.environmentId
+            val shell = restored.shell
+            state = state.copy(
+                config = restored.config,
+                projects = shell?.projects ?: emptyList(),
+                threads = shell?.threads ?: emptyList(),
+                archivedThreads = shell?.archivedThreads ?: emptyList(),
+                shellLoaded = shell != null,
+                connectionStatus = ConnectionStatus.Reconnecting,
+                connectionNote = "Restored saved chats. Reconnecting to ${environmentLabel()}…",
+            )
+        }
     }
 
     // ---------------------------------------------------------------- connection
@@ -338,8 +390,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     pullRequests = if (reconnecting) state.pullRequests else PullRequestsUi(),
                     error = null,
                 )
+                cachedEnvironmentId = result.first.config.environment.environmentId
                 startShellWatch()
                 ensureModelsLoaded(force = true, quiet = true)
+                viewModelScope.launch(Dispatchers.IO) {
+                    runCatching {
+                        clientCache.saveConfig(base, cachedEnvironmentId.orEmpty(), result.first.config)
+                        clientCache.saveShell(base, cachedEnvironmentId.orEmpty(), result.second)
+                    }
+                }
                 // A reconnect gets a fresh native connection. Restart the open
                 // thread so its feed and projection use the new handle.
                 if (activeThreadId != null && state.activeThreadId == activeThreadId) {
@@ -522,6 +581,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 showArchived = false,
                 homeFilterOpen = false,
                 pullRequests = PullRequestsUi(),
+                pullRequestDetail = null,
                 shellLoaded = false,
                 connectionStatus = ConnectionStatus.Offline,
                 connectionNote = null,
@@ -612,6 +672,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (activeSummary != null) current.copy(summary = activeSummary) else current
             },
         )
+        cacheShell(snapshot, force = false)
+    }
+
+    private fun cacheShell(snapshot: ShellSnapshot, force: Boolean) {
+        val config = state.config ?: return
+        val base = state.baseUrl
+        val environmentId = config.environment.environmentId.ifBlank {
+            cachedEnvironmentId.orEmpty()
+        }
+        if (environmentId.isBlank()) return
+        cachedEnvironmentId = environmentId
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - lastShellCacheAt < 2_000L) return
+        lastShellCacheAt = now
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { clientCache.saveShell(base, environmentId, snapshot) }
+        }
+    }
+
+    private fun cacheThread(snapshot: ThreadDetailSnapshot, threadId: String, force: Boolean) {
+        if (snapshot.projection.thread.activeRunId != null) return
+        val config = state.config ?: return
+        val environmentId = config.environment.environmentId.ifBlank {
+            cachedEnvironmentId.orEmpty()
+        }
+        if (environmentId.isBlank()) return
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - lastThreadCacheAt < 4_000L) return
+        lastThreadCacheAt = now
+        val base = state.baseUrl
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { clientCache.saveThread(base, environmentId, threadId, snapshot) }
+        }
     }
 
     fun refresh() {
@@ -656,6 +749,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (connection !== conn) return@launch
                 lastProviderRefreshAt = SystemClock.elapsedRealtime()
                 state = state.copy(config = config, modelsRefreshing = false)
+                val environmentId = config.environment.environmentId.ifBlank {
+                    cachedEnvironmentId.orEmpty()
+                }
+                if (environmentId.isNotBlank()) {
+                    cachedEnvironmentId = environmentId
+                    val base = state.baseUrl
+                    viewModelScope.launch(Dispatchers.IO) {
+                        runCatching { clientCache.saveConfig(base, environmentId, config) }
+                    }
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
@@ -725,6 +828,281 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadPullRequests(force = true, stateFilter = stateFilter)
     }
 
+    // ------------------------------------------------------------ pull request detail
+
+    fun openPullRequest(entry: PullRequestEntry) {
+        pullRequestDetailJob?.cancel()
+        pullRequestDiffJob?.cancel()
+        state = state.copy(
+            pullRequestDetail = PullRequestDetailUi(entry = entry),
+        )
+        loadPullRequestDetail()
+        loadPullRequestDiff()
+    }
+
+    /**
+     * A thread card only carries the linked PR's URL. If the list has not been
+     * loaded yet, reconstruct the reference so tapping the card opens the same
+     * in-app detail screen instead of dumping the user into a browser.
+     */
+    fun openPullRequestFromThread(
+        url: String,
+        projectId: String,
+        title: String,
+        stateName: String,
+        number: Int?,
+    ) {
+        state.pullRequests.entries.firstOrNull { it.url.equals(url, ignoreCase = true) }
+            ?.let { openPullRequest(it) }
+            ?: run {
+                val parsed = parsePullRequestUrl(url)
+                if (parsed == null) {
+                    toast("Could not open that pull request.")
+                    return
+                }
+                val project = state.projects.firstOrNull { it.id == projectId }
+                val entry = PullRequestEntry(
+                    provider = "github",
+                    host = parsed.first,
+                    projectId = projectId,
+                    projectTitle = project?.title.orEmpty(),
+                    repository = parsed.second,
+                    number = number ?: parsed.third,
+                    title = title.ifBlank { "Pull request #${number ?: parsed.third}" },
+                    url = url,
+                    state = stateName.ifBlank { "open" },
+                )
+                openPullRequest(entry)
+            }
+    }
+
+    fun closePullRequest() {
+        pullRequestDetailJob?.cancel()
+        pullRequestDetailJob = null
+        pullRequestDiffJob?.cancel()
+        pullRequestDiffJob = null
+        state = state.copy(pullRequestDetail = null)
+    }
+
+    fun setPullRequestTab(tab: String) {
+        val current = state.pullRequestDetail ?: return
+        state = state.copy(pullRequestDetail = current.copy(tab = tab))
+    }
+
+    fun setPullRequestMergeMethod(method: String) {
+        val current = state.pullRequestDetail ?: return
+        state = state.copy(pullRequestDetail = current.copy(selectedMethod = method))
+    }
+
+    fun loadPullRequestDetail() {
+        val current = state.pullRequestDetail ?: return
+        val conn = connection ?: return
+        val ref = current.entry
+        state = state.copy(
+            pullRequestDetail = current.copy(loading = current.detail == null, error = null),
+        )
+        pullRequestDetailJob?.cancel()
+        pullRequestDetailJob = viewModelScope.launch {
+            try {
+                val detail = withContext(Dispatchers.IO) {
+                    T3Core.json.decodeFromJsonElement<PullRequestDetail>(
+                        conn.callObject("pullRequests.detail", pullRequestRef(ref)),
+                    )
+                }
+                val latest = state.pullRequestDetail ?: return@launch
+                if (latest.entry.projectId != ref.projectId ||
+                    latest.entry.number != ref.number
+                ) return@launch
+                val methods = detail.capabilities.mergeMethods
+                val selected = when {
+                    latest.selectedMethod in methods -> latest.selectedMethod
+                    "squash" in methods -> "squash"
+                    methods.isNotEmpty() -> methods.first()
+                    else -> latest.selectedMethod
+                }
+                state = state.copy(
+                    pullRequestDetail = latest.copy(
+                        detail = detail,
+                        loading = false,
+                        error = null,
+                        selectedMethod = selected,
+                    ),
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                val latest = state.pullRequestDetail ?: return@launch
+                state = state.copy(
+                    pullRequestDetail = latest.copy(loading = false, error = describe(error)),
+                )
+            }
+        }
+    }
+
+    fun loadPullRequestDiff(cursor: String? = null) {
+        val current = state.pullRequestDetail ?: return
+        val conn = connection ?: return
+        val baseUrl = state.baseUrl
+        val token = state.token
+        state = state.copy(
+            pullRequestDetail = current.copy(
+                diffLoading = true,
+                diffError = null,
+                diff = if (cursor == null) null else current.diff,
+            ),
+        )
+        pullRequestDiffJob?.cancel()
+        pullRequestDiffJob = viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    fetchPullRequestDiff(baseUrl, token, current.entry, cursor)
+                }
+                val latest = state.pullRequestDetail ?: return@launch
+                val existing = if (cursor == null) null else latest.diff
+                val combined = if (existing == null) result else result.copy(
+                    patch = existing.patch.trimEnd() + "\n" + result.patch,
+                    omittedFileStats = existing.omittedFileStats + result.omittedFileStats,
+                )
+                state = state.copy(
+                    pullRequestDetail = latest.copy(
+                        diff = combined,
+                        diffLoading = false,
+                        diffError = null,
+                    ),
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                val latest = state.pullRequestDetail ?: return@launch
+                state = state.copy(
+                    pullRequestDetail = latest.copy(
+                        diffLoading = false,
+                        diffError = describe(error),
+                    ),
+                )
+            }
+        }
+    }
+
+    fun mergePullRequest(method: String) {
+        val current = state.pullRequestDetail ?: return
+        if (current.actionBusy) return
+        runPullRequestAction("merge", method)
+    }
+
+    fun runPullRequestAction(action: String, mergeMethod: String? = null) {
+        val current = state.pullRequestDetail ?: return
+        val conn = connection ?: return
+        if (current.actionBusy) return
+        state = state.copy(
+            pullRequestDetail = current.copy(actionBusy = true, error = null),
+        )
+        viewModelScope.launch {
+            try {
+                val payload = buildJsonObject {
+                    put("projectId", current.entry.projectId)
+                    if (current.entry.host.isNotBlank()) put("host", current.entry.host)
+                    put("repository", current.entry.repository)
+                    put("number", current.entry.number)
+                    put("action", action)
+                    mergeMethod?.let { put("mergeMethod", it) }
+                }
+                withContext(Dispatchers.IO) { conn.callRaw("pullRequests.runAction", payload) }
+                val latest = state.pullRequestDetail ?: return@launch
+                state = state.copy(
+                    pullRequestDetail = latest.copy(actionBusy = false),
+                )
+                toast(
+                    when (action) {
+                        "merge" -> "Pull request merged"
+                        "ready" -> "Marked ready for review"
+                        "draft" -> "Converted to draft"
+                        "close" -> "Pull request closed"
+                        "reopen" -> "Pull request reopened"
+                        "update-branch" -> "Branch updated"
+                        else -> "Pull request updated"
+                    },
+                )
+                loadPullRequestDetail()
+                loadPullRequests(force = true, stateFilter = state.pullRequests.state)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                val latest = state.pullRequestDetail
+                if (latest != null) {
+                    state = state.copy(
+                        pullRequestDetail = latest.copy(
+                            actionBusy = false,
+                            error = describe(error),
+                        ),
+                    )
+                }
+                toast(describe(error))
+            }
+        }
+    }
+
+    private fun pullRequestRef(entry: PullRequestEntry): JsonObject = buildJsonObject {
+        put("projectId", entry.projectId)
+        if (entry.host.isNotBlank()) put("host", entry.host)
+        put("repository", entry.repository)
+        put("number", entry.number)
+    }
+
+    private fun fetchPullRequestDiff(
+        baseUrl: String,
+        token: String,
+        entry: PullRequestEntry,
+        cursor: String?,
+    ): PullRequestDiffResult {
+        val endpoint = "${baseUrl.trimEnd('/')}/api/pull-requests/diff"
+        val payload = buildJsonObject {
+            put("projectId", entry.projectId)
+            if (entry.host.isNotBlank()) put("host", entry.host)
+            put("repository", entry.repository)
+            put("number", entry.number)
+            cursor?.takeIf { it.isNotBlank() }?.let { put("cursor", it) }
+        }
+        val connection = URL(endpoint).openConnection() as HttpURLConnection
+        return try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 20_000
+            connection.readTimeout = 60_000
+            connection.doOutput = true
+            connection.setRequestProperty("Authorization", "Bearer $token")
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("x-t3-orchestration-protocol", "2")
+            connection.outputStream.use { it.write(payload.toString().toByteArray()) }
+            val code = connection.responseCode
+            val text = (if (code in 200..299) connection.inputStream else connection.errorStream)
+                ?.bufferedReader()
+                ?.use { it.readText() }
+                .orEmpty()
+            if (code !in 200..299) {
+                throw T3Exception(
+                    text.takeIf { it.isNotBlank() } ?: "Pull request diff failed ($code).",
+                )
+            }
+            T3Core.json.decodeFromString<PullRequestDiffResult>(text)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun parsePullRequestUrl(url: String): Triple<String, String, Int>? = runCatching {
+        val uri = URI(url)
+        val segments = uri.path.trim('/').split('/')
+        val number = segments.getOrNull(3)?.toIntOrNull()
+        if (uri.host.isNullOrBlank() || segments.size < 4 ||
+            segments[2] != "pull" || number == null
+        ) {
+            null
+        } else {
+            Triple(uri.host, "${segments[0]}/${segments[1]}", number)
+        }
+    }.getOrNull()
+
     // ------------------------------------------------------------------ navigation
 
     fun selectTab(tab: AppTab) {
@@ -775,6 +1153,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         threadJob = viewModelScope.launch {
             var feed: ThreadFeed? = null
             try {
+                // Paint the last saved transcript before asking the server.
+                val environmentId = currentEnvironmentId()
+                if (environmentId != null) {
+                    val cached = withContext(Dispatchers.IO) {
+                        clientCache.loadThread(state.baseUrl, environmentId, threadId)
+                    }
+                    if (cached != null && isActive && state.activeThreadId == threadId) {
+                        val current = state.thread
+                        if (current != null && current.projection.thread.id.isEmpty()) {
+                            applyThreadDetail(threadId, cached)
+                        }
+                    }
+                }
                 while (isActive && state.activeThreadId == threadId) {
                     val conn = connection
                     if (conn == null) {
@@ -982,6 +1373,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 historyCursor = detail.historyCursor ?: latest.historyCursor,
             )
         }
+        cacheThread(detail, threadId, force = false)
     }
 
     private fun applyThreadProjection(
@@ -1015,7 +1407,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             sequence = maxOf(current.sequence, sequence),
             pendingUserItems = pending,
         )
-        state = state.copy(thread = extra(latest))
+        val applied = extra(latest)
+        state = state.copy(thread = applied)
+        if (projection.thread.activeRunId == null && projection.thread.id.isNotEmpty()) {
+            cacheThread(
+                ThreadDetailSnapshot(
+                    snapshotSequence = applied.sequence,
+                    projection = projection,
+                    historyCursor = applied.historyCursor,
+                    hasMoreHistory = applied.hasMoreHistory,
+                ),
+                threadId,
+                force = false,
+            )
+        }
+    }
+
+    private fun currentEnvironmentId(): String? {
+        val configured = state.config?.environment?.environmentId?.takeIf { it.isNotBlank() }
+        return configured ?: cachedEnvironmentId?.takeIf { it.isNotBlank() }
     }
 
     private fun setThreadLive(threadId: String, live: Boolean) {
@@ -1037,6 +1447,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeThread() {
+        val current = state.thread
+        val environmentId = currentEnvironmentId()
+        if (current != null &&
+            current.projection.thread.id.isNotEmpty() &&
+            current.projection.thread.activeRunId == null &&
+            environmentId != null
+        ) {
+            val snapshot = ThreadDetailSnapshot(
+                snapshotSequence = current.sequence,
+                projection = current.projection,
+                historyCursor = current.historyCursor,
+                hasMoreHistory = current.hasMoreHistory,
+            )
+            val base = state.baseUrl
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { clientCache.saveThread(base, environmentId, current.threadId, snapshot) }
+            }
+        }
         threadJob?.cancel()
         threadJob = null
         threadFeed?.close()
@@ -1200,12 +1628,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 when (action) {
                     "archive" -> toast("Thread archived")
                     "unarchive" -> toast("Thread restored")
-                    "delete" -> toast("Thread deleted")
+                    "delete" -> {
+                        val environmentId = currentEnvironmentId()
+                        if (environmentId != null) {
+                            withContext(Dispatchers.IO) {
+                                clientCache.removeThread(state.baseUrl, environmentId, threadId)
+                            }
+                        }
+                        toast("Thread deleted")
+                    }
                     "rename" -> toast("Thread renamed")
                     "pin" -> toast("Thread pinned")
                     "unpin" -> toast("Thread unpinned")
                     "settle" -> toast("Thread settled")
                     "unsettle" -> toast("Thread moved back to chats")
+                    "snooze" -> toast("Thread snoozed")
+                    "unsnooze" -> toast("Thread unsnoozed")
                     "setModel" -> toast("Model changed")
                     "markRead", "markUnread", "setRuntimeMode", "setInteractionMode" -> Unit
                 }
@@ -1272,6 +1710,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     unsettledAt = now,
                     updatedAt = now,
                 )
+                threads = threads.updatedThread { next }
+                archived = archived.updatedThread { next }
+                updated = next
+            }
+            "snooze" -> {
+                val next = existing.copy(snoozedAt = now, snoozedUntil = value, updatedAt = now)
+                threads = threads.updatedThread { next }
+                archived = archived.updatedThread { next }
+                updated = next
+            }
+            "unsnooze" -> {
+                val next = existing.copy(snoozedAt = null, snoozedUntil = null, updatedAt = now)
                 threads = threads.updatedThread { next }
                 archived = archived.updatedThread { next }
                 updated = next
@@ -1577,10 +2027,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openTerminal(threadId: String) {
         val conn = connection ?: return
-        val cwd = resolveCwd(threadId) ?: run {
-            toast("This thread has no workspace path.")
+        val cwd = resolveCwd(threadId)
+        if (cwd != null) {
+            startTerminal(conn, threadId, cwd)
             return
         }
+        viewModelScope.launch {
+            val resolved = resolveWorkspacePath(conn, threadId)
+            if (resolved == null) {
+                toast("This thread has no workspace path yet. Try again after it finishes loading.")
+                return@launch
+            }
+            startTerminal(conn, threadId, resolved)
+        }
+    }
+
+    private fun startTerminal(conn: T3Connection, threadId: String, cwd: String) {
         closeTerminal()
         state = state.copy(terminal = TerminalUi(threadId = threadId, cwd = cwd))
         terminalJob = viewModelScope.launch {
@@ -1695,10 +2157,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openDiff(threadId: String) {
         val conn = connection ?: return
-        val cwd = resolveCwd(threadId) ?: run {
-            toast("This thread has no workspace path.")
+        val cwd = resolveCwd(threadId)
+        if (cwd != null) {
+            startDiff(conn, threadId, cwd)
             return
         }
+        viewModelScope.launch {
+            val resolved = resolveWorkspacePath(conn, threadId)
+            if (resolved == null) {
+                toast("This thread has no workspace path yet. Try again after it finishes loading.")
+                return@launch
+            }
+            startDiff(conn, threadId, resolved)
+        }
+    }
+
+    private fun startDiff(conn: T3Connection, threadId: String, cwd: String) {
         diffJob?.cancel()
         state = state.copy(diff = DiffUi(threadId = threadId, cwd = cwd, loading = true))
         diffJob = viewModelScope.launch {
@@ -1737,10 +2211,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ---------------------------------------------------------------------- files
 
     fun openFiles(threadId: String) {
-        val cwd = resolveCwd(threadId) ?: run {
-            toast("This thread has no workspace path.")
+        val conn = connection ?: return
+        val cwd = resolveCwd(threadId)
+        if (cwd != null) {
+            startFiles(threadId, cwd)
             return
         }
+        viewModelScope.launch {
+            val resolved = resolveWorkspacePath(conn, threadId)
+            if (resolved == null) {
+                toast("This thread has no workspace path yet. Try again after it finishes loading.")
+                return@launch
+            }
+            startFiles(threadId, resolved)
+        }
+    }
+
+    private fun startFiles(threadId: String, cwd: String) {
         filesJob?.cancel()
         state = state.copy(
             files = FilesUi(threadId = threadId, cwd = cwd, directory = "", loading = true),
@@ -1761,7 +2248,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (latest.cwd != cwd) return@launch
                 state = state.copy(
                     files = latest.copy(
-                        entries = result.entries,
+                        entries = immediateEntries(result.entries, directory),
                         truncated = result.truncated,
                         loading = false,
                     ),
@@ -1778,6 +2265,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun navigateFiles(directory: String) {
         val current = state.files ?: return
         loadEntries(current.cwd, directory)
+    }
+
+    /**
+     * The server answers a directory listing with every descendant. The
+     * official client only renders entries whose parent is the requested
+     * directory and loads children when a folder is expanded; without this
+     * the first Files page was an unstructured dump of the whole repository.
+     */
+    private fun immediateEntries(entries: List<ProjectEntry>, directory: String): List<ProjectEntry> {
+        val parent = directory.trim('/').trim()
+        return entries.filter { entry ->
+            val path = entry.path.trim('/').trim()
+            path.isNotEmpty() && path.substringBeforeLast('/', missingDelimiterValue = "") == parent
+        }
     }
 
     fun openFile(path: String) {
@@ -1831,10 +2332,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun resolveCwd(threadId: String): String? {
-        val detail = state.thread?.takeIf { it.threadId == threadId }?.projection?.thread
-        val summary = detail?.takeIf { it.id.isNotEmpty() } ?: state.summaryFor(threadId)
-        val project = state.projectFor(summary)
-        return summary?.worktreePath?.takeIf { it.isNotBlank() } ?: project?.workspaceRoot
+        val active = state.thread?.takeIf { it.threadId == threadId }
+        val detail = active?.projection?.thread
+        val summary = active?.summary?.takeIf { it.id == threadId }
+            ?: detail?.takeIf { it.id.isNotEmpty() }
+            ?: state.summaryFor(threadId)
+        val projectId = summary?.projectId ?: detail?.projectId
+        val project = projectId?.let { id -> state.projects.firstOrNull { it.id == id } }
+            ?: state.projectFor(summary)
+        return detail?.worktreePath?.takeIf { it.isNotBlank() }
+            ?: summary?.worktreePath?.takeIf { it.isNotBlank() }
+            ?: project?.workspaceRoot?.takeIf { it.isNotBlank() }
+            ?: state.config?.scratchWorkspaceRoot?.takeIf { it.isNotBlank() }
+            ?: state.config?.cwd?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * A cached shell can lag behind a thread that was just created (or a
+     * project that was just added). Resolve from the live thread/project
+     * endpoints before giving up, which is what made Files, Terminal and
+     * review surface "no workspace path" straight after opening a thread.
+     */
+    private suspend fun resolveWorkspacePath(conn: T3Connection, threadId: String): String? {
+        resolveCwd(threadId)?.let { return it }
+        val detail = withContext(Dispatchers.IO) {
+            runCatching { conn.thread(threadId) }.getOrNull()
+        }
+        if (detail != null && state.activeThreadId == threadId) {
+            applyThreadDetail(threadId, detail)
+        }
+        val projectId = detail?.projection?.thread?.projectId
+            ?: state.summaryFor(threadId)?.projectId
+        var projects = state.projects
+        if (projectId != null && projects.none { it.id == projectId }) {
+            val loaded = withContext(Dispatchers.IO) {
+                runCatching { conn.projects().projects }.getOrNull()
+            }
+            if (loaded != null) {
+                projects = loaded
+                state = state.copy(projects = loaded)
+            }
+        }
+        val project = projectId?.let { id -> projects.firstOrNull { it.id == id } }
+        return detail?.projection?.thread?.worktreePath?.takeIf { it.isNotBlank() }
+            ?: state.summaryFor(threadId)?.worktreePath?.takeIf { it.isNotBlank() }
+            ?: project?.workspaceRoot?.takeIf { it.isNotBlank() }
+            ?: state.config?.scratchWorkspaceRoot?.takeIf { it.isNotBlank() }
+            ?: state.config?.cwd?.takeIf { it.isNotBlank() }
     }
 
     // ---------------------------------------------------------------- diagnostics
