@@ -27,14 +27,17 @@ All releases:
 
 ## Features
 
-- Auto-connect with saved token, device pairing, and connection diagnostics
-- Chats home with settled-thread shelves, project filters, search, pin, rename,
-  archive, delete, and mark read/unread
+- Auto-connect with saved token, device pairing, foreground reconnection, and
+  a visible reconnecting/offline status banner
+- Chats home with settled conversations shown by default, project filters,
+  search, pin, rename, settle/unsettle, archive, delete, and mark read/unread
+- Instant local updates for settle, archive, delete, pin, rename, and model
+  changes, reconciled from the live shell afterwards
 - Pull-requests list with open/merged/closed filters and direct links to GitHub
 - Live thread timeline: Markdown, compact tool calls grouped into collapsible
   work logs, reasoning, commands, file changes, approvals, interrupts, and PRs
-- Composer with image/file attachments, send, queue while running, stop, and
-  in-thread model switching
+- Composer with image/file attachments, send, queue while running, stop, and an
+  in-composer model picker backed by provider/model catalog refresh
 - Per-thread run permissions (ask first, auto-accept edits, auto, full access)
   and plan mode
 - Project browser, usage dashboard with charts, provider list, and self-test

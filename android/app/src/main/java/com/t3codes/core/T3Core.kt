@@ -21,6 +21,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
+import kotlinx.serialization.json.put
 import java.io.Closeable
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -122,6 +123,23 @@ class T3Connection internal constructor(
 
     fun configJson(): ServerConfig =
         T3Core.json.decodeFromString(Native.nativeConfig(handle).let { T3Core.ensureOk(it).toString() })
+
+    /**
+     * Re-runs provider discovery, including model catalogs, then reloads the
+     * server config. The live config can start out with empty model lists, so
+     * the composer asks for this before showing model choices.
+     */
+    fun refreshProviderCatalog(): ServerConfig {
+        // Older servers may not implement refreshProviders. Still reload the
+        // config afterwards so model lists already cached by the server appear.
+        runCatching {
+            callRaw(
+                "server.refreshProviders",
+                buildJsonObject { put("refreshModels", true) },
+            )
+        }
+        return T3Core.json.decodeFromJsonElement(callObject("server.getConfig"))
+    }
 
     fun shell(): ShellSnapshot =
         T3Core.json.decodeFromString(T3Core.ensureOk(Native.nativeShell(handle)).toString())

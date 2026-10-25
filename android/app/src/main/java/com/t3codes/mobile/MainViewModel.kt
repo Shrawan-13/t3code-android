@@ -48,10 +48,12 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
@@ -65,6 +67,13 @@ enum class AppTab(val label: String) {
 }
 
 val bottomTabs = listOf(AppTab.Threads, AppTab.PullRequests)
+
+enum class ConnectionStatus {
+    Connecting,
+    Live,
+    Reconnecting,
+    Offline,
+}
 
 data class ThreadUi(
     val threadId: String,
@@ -149,9 +158,14 @@ data class UiState(
     val projects: List<Project> = emptyList(),
     val threads: List<ThreadShell> = emptyList(),
     val archivedThreads: List<ThreadShell> = emptyList(),
+    val shellLoaded: Boolean = false,
+    val connectionStatus: ConnectionStatus = ConnectionStatus.Offline,
+    val connectionNote: String? = null,
+    val modelsRefreshing: Boolean = false,
     val tab: AppTab = AppTab.Threads,
     val projectFilter: String? = null,
     val search: String = "",
+    val showSettled: Boolean = true,
     val showArchived: Boolean = false,
     val homeFilterOpen: Boolean = false,
     val pullRequests: PullRequestsUi = PullRequestsUi(),
@@ -194,6 +208,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var filesJob: Job? = null
     private var usageJob: Job? = null
     private var pullRequestsJob: Job? = null
+    private var connectJob: Job? = null
+    private var shellRefreshJob: Job? = null
+    private var reconnectJob: Job? = null
+    private var modelsJob: Job? = null
+    private var reconnectAttempts = 0
+    private var lastProviderRefreshAt = 0L
+    private var stoppedInBackground = false
 
     var state by mutableStateOf(
         UiState(
@@ -241,7 +262,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         state = state.copy(toast = message)
     }
 
-    fun connect() {
+    fun connect(
+        reconnecting: Boolean = false,
+        automatic: Boolean = false,
+        note: String? = null,
+    ) {
         if (state.connecting) return
         val base = state.baseUrl.trim()
         val token = state.token.trim()
@@ -253,8 +278,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             state = state.copy(error = "Paste a bearer token or pair this device first.")
             return
         }
-        state = state.copy(connecting = true, error = null)
-        viewModelScope.launch {
+        reconnectJob?.cancel()
+        reconnectJob = null
+        if (!reconnecting) reconnectAttempts = 0
+        state = state.copy(
+            connecting = true,
+            error = null,
+            connectionStatus = if (reconnecting) {
+                ConnectionStatus.Reconnecting
+            } else {
+                ConnectionStatus.Connecting
+            },
+            connectionNote = note ?: if (reconnecting) {
+                "Reconnecting to ${environmentLabel()}…"
+            } else {
+                null
+            },
+        )
+        connectJob = viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
                     stopAllStreams()
@@ -267,11 +308,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 connection = result.first
+                reconnectAttempts = 0
                 prefs.edit()
                     .putString(KEY_BASE, base)
                     .putString(KEY_TOKEN, token)
                     .putBoolean(KEY_AUTO, true)
                     .apply()
+                val activeThreadId = state.activeThreadId
                 state = state.copy(
                     connecting = false,
                     baseUrl = base,
@@ -280,22 +323,143 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     projects = result.second.projects,
                     threads = result.second.threads,
                     archivedThreads = result.second.archivedThreads,
-                    projectFilter = null,
-                    search = "",
-                    pullRequests = PullRequestsUi(),
+                    shellLoaded = true,
+                    connectionStatus = ConnectionStatus.Live,
+                    connectionNote = null,
+                    modelsRefreshing = false,
+                    projectFilter = if (reconnecting) state.projectFilter else null,
+                    search = if (reconnecting) state.search else "",
+                    pullRequests = if (reconnecting) state.pullRequests else PullRequestsUi(),
                     error = null,
                 )
                 startShellWatch()
+                ensureModelsLoaded(force = true, quiet = true)
+                // A reconnect gets a fresh native connection. Restart the open
+                // thread so its feed and projection use the new handle.
+                if (activeThreadId != null && state.activeThreadId == activeThreadId) {
+                    state = state.copy(activeThreadId = null, thread = null)
+                    openThread(activeThreadId)
+                }
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
                 connection = null
-                state = state.copy(
-                    connecting = false,
-                    config = null,
-                    projects = emptyList(),
-                    threads = emptyList(),
-                    archivedThreads = emptyList(),
-                    pullRequests = PullRequestsUi(),
-                    error = describe(error),
+                if (automatic && state.config != null) {
+                    val message = "Can't reach ${environmentLabel()}. Retrying…"
+                    state = state.copy(
+                        connecting = false,
+                        connectionStatus = ConnectionStatus.Reconnecting,
+                        connectionNote = message,
+                        error = null,
+                    )
+                    scheduleReconnect(message)
+                } else {
+                    state = state.copy(
+                        connecting = false,
+                        config = null,
+                        projects = emptyList(),
+                        threads = emptyList(),
+                        archivedThreads = emptyList(),
+                        shellLoaded = false,
+                        connectionStatus = ConnectionStatus.Offline,
+                        connectionNote = null,
+                        pullRequests = PullRequestsUi(),
+                        error = describe(error),
+                    )
+                }
+            }
+        }
+    }
+
+    /** User-initiated retry from the offline/reconnecting banner. */
+    fun retryConnection() {
+        if (state.connecting) return
+        val hasSession = state.token.isNotBlank()
+        if (!hasSession) {
+            state = state.copy(error = "Paste a bearer token or pair this device first.")
+            return
+        }
+        connect(
+            reconnecting = state.config != null,
+            automatic = state.config != null,
+            note = "Reconnecting to ${environmentLabel()}…",
+        )
+    }
+
+    fun onAppBackgrounded() {
+        stoppedInBackground = true
+    }
+
+    fun onAppForegrounded() {
+        if (!stoppedInBackground) return
+        stoppedInBackground = false
+        if (state.connecting) return
+        if (state.token.isBlank()) return
+        val conn = connection
+        if (state.config == null || conn == null) {
+            retryConnection()
+            return
+        }
+        state = state.copy(
+            connectionStatus = ConnectionStatus.Reconnecting,
+            connectionNote = "Checking connection to ${environmentLabel()}…",
+        )
+        viewModelScope.launch {
+            val snapshot = withContext(Dispatchers.IO) {
+                runCatching { conn.shell() }.getOrNull()
+            }
+            if (snapshot == null) {
+                if (connection === conn) {
+                    connect(
+                        reconnecting = true,
+                        automatic = true,
+                        note = "Reconnecting to ${environmentLabel()}…",
+                    )
+                }
+                return@launch
+            }
+            if (connection !== conn) return@launch
+            applyShell(snapshot)
+            state = state.copy(
+                shellLoaded = true,
+                connectionStatus = ConnectionStatus.Live,
+                connectionNote = null,
+            )
+            startShellWatch()
+            ensureModelsLoaded(force = false)
+            // Websocket feeds can be torn down while Android backgrounds the
+            // app even though plain HTTP still works. Re-subscribe to the open
+            // thread so its timeline becomes live again.
+            if (state.activeThreadId != null) retryThread()
+        }
+    }
+
+    private fun environmentLabel(): String =
+        state.config?.environment?.label?.ifBlank { "the machine" } ?: "the machine"
+
+    private fun scheduleReconnect(note: String? = null) {
+        if (state.config == null || state.connecting) return
+        if (reconnectJob?.isActive == true) return
+        reconnectAttempts = (reconnectAttempts + 1).coerceAtMost(6)
+        val waitMs = when (reconnectAttempts) {
+            1 -> 1_000L
+            2 -> 2_000L
+            3 -> 4_000L
+            4 -> 8_000L
+            else -> 15_000L
+        }
+        state = state.copy(
+            connectionStatus = ConnectionStatus.Reconnecting,
+            connectionNote = note ?: "Reconnecting to ${environmentLabel()}…",
+        )
+        reconnectJob = viewModelScope.launch {
+            delay(waitMs)
+            reconnectJob = null
+            if (state.config != null && !state.connecting) {
+                connect(
+                    reconnecting = true,
+                    automatic = true,
+                    note = "Reconnecting to ${environmentLabel()}…",
                 )
             }
         }
@@ -324,6 +488,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun disconnect() {
         prefs.edit().putBoolean(KEY_AUTO, false).apply()
+        reconnectJob?.cancel()
+        reconnectJob = null
+        reconnectAttempts = 0
+        lastProviderRefreshAt = 0L
+        stoppedInBackground = false
+        modelsJob?.cancel()
+        modelsJob = null
         viewModelScope.launch {
             withContext(Dispatchers.IO) { stopAllStreams() }
             state = state.copy(
@@ -341,9 +512,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 tab = AppTab.Threads,
                 projectFilter = null,
                 search = "",
+                showSettled = true,
                 showArchived = false,
                 homeFilterOpen = false,
                 pullRequests = PullRequestsUi(),
+                shellLoaded = false,
+                connectionStatus = ConnectionStatus.Offline,
+                connectionNote = null,
+                modelsRefreshing = false,
                 error = null,
             )
         }
@@ -352,34 +528,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun startShellWatch() {
         shellJob?.cancel()
         shellFeed?.close()
+        shellFeed = null
         shellJob = viewModelScope.launch {
-            val conn = connection ?: return@launch
-            val feed = try {
-                withContext(Dispatchers.IO) { conn.watchShell() }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                toast("Live updates unavailable: ${describe(error)}")
-                return@launch
-            }
-            shellFeed = feed
-            try {
-                feed.events.collect {
-                    val snapshot = withContext(Dispatchers.IO) { feed.snapshot() }
-                    applyShell(snapshot)
+            var attempts = 0
+            while (isActive && state.config != null) {
+                val conn = connection ?: break
+                var feed: ShellFeed? = null
+                try {
+                    val activeFeed = withContext(Dispatchers.IO) { conn.watchShell() }
+                    feed = activeFeed
+                    if (connection !== conn) {
+                        runCatching { activeFeed.close() }
+                        break
+                    }
+                    shellFeed = activeFeed
+                    attempts = 0
+                    state = state.copy(
+                        connectionStatus = ConnectionStatus.Live,
+                        connectionNote = null,
+                    )
+                    try {
+                        activeFeed.events.collect {
+                            val snapshot = withContext(Dispatchers.IO) { activeFeed.snapshot() }
+                            applyShell(snapshot)
+                        }
+                    } finally {
+                        runCatching { activeFeed.close() }
+                        if (shellFeed === activeFeed) shellFeed = null
+                    }
+                    if (!isActive || connection !== conn) break
+                    state = state.copy(
+                        connectionStatus = ConnectionStatus.Reconnecting,
+                        connectionNote = "Live updates paused. Reconnecting…",
+                    )
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    runCatching { feed?.close() }
+                    if (connection !== conn) break
+                    Log.w(LOG_TAG, "shell feed failed", error)
+                    state = state.copy(
+                        connectionStatus = ConnectionStatus.Reconnecting,
+                        connectionNote = "Reconnecting to ${environmentLabel()}…",
+                    )
                 }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                if (state.config != null) toast("Live updates stopped: ${describe(error)}")
-            } finally {
-                runCatching { feed.close() }
+                attempts++
+                if (attempts >= 3) {
+                    scheduleReconnect("Live updates lost. Reconnecting to ${environmentLabel()}…")
+                    break
+                }
+                delay(attempts * 1_000L)
             }
         }
     }
 
     private fun applyShell(snapshot: ShellSnapshot) {
         if (state.config == null) return
+        // A successful shell read means the session is healthy again. Cancel
+        // any retry that was queued while it was down.
+        if (connection != null) {
+            reconnectJob?.cancel()
+            reconnectJob = null
+            reconnectAttempts = 0
+        }
         val activeSummary = state.activeThreadId?.let { id ->
             snapshot.threads.firstOrNull { it.id == id }
                 ?: snapshot.archivedThreads.firstOrNull { it.id == id }
@@ -388,6 +599,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             projects = snapshot.projects,
             threads = snapshot.threads,
             archivedThreads = snapshot.archivedThreads,
+            shellLoaded = true,
+            connectionStatus = ConnectionStatus.Live,
+            connectionNote = null,
             thread = state.thread?.let { current ->
                 if (activeSummary != null) current.copy(summary = activeSummary) else current
             },
@@ -395,13 +609,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            val conn = connection ?: return@launch
+        if (state.connecting) return
+        val conn = connection ?: run {
+            if (state.config != null) retryConnection()
+            return
+        }
+        if (shellRefreshJob?.isActive == true) return
+        shellRefreshJob = viewModelScope.launch {
             try {
                 val snapshot = withContext(Dispatchers.IO) { conn.shell() }
-                applyShell(snapshot)
+                if (connection === conn) applyShell(snapshot)
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
-                toast(describe(error))
+                if (connection !== conn) return@launch
+                val message = "Reconnecting to ${environmentLabel()}…"
+                state = state.copy(
+                    connectionStatus = ConnectionStatus.Reconnecting,
+                    connectionNote = message,
+                )
+                scheduleReconnect(message)
+            }
+        }
+    }
+
+    /**
+     * Refresh provider discovery. Live configs frequently start with empty
+     * model lists; the server fills them after refreshProviders.
+     */
+    fun ensureModelsLoaded(force: Boolean = false, quiet: Boolean = false) {
+        val conn = connection ?: return
+        if (state.modelsRefreshing) return
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - lastProviderRefreshAt < 60_000L) return
+        state = state.copy(modelsRefreshing = true)
+        modelsJob?.cancel()
+        modelsJob = viewModelScope.launch {
+            try {
+                val config = withContext(Dispatchers.IO) { conn.refreshProviderCatalog() }
+                if (connection !== conn) return@launch
+                lastProviderRefreshAt = SystemClock.elapsedRealtime()
+                state = state.copy(config = config, modelsRefreshing = false)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                if (connection === conn) {
+                    state = state.copy(modelsRefreshing = false)
+                    if (force && !quiet) toast("Could not load models: ${describe(error)}")
+                }
             }
         }
     }
@@ -469,6 +724,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun selectTab(tab: AppTab) {
         state = state.copy(tab = tab, homeFilterOpen = false)
         when (tab) {
+            AppTab.Threads -> refresh()
             AppTab.Usage -> loadUsage(state.usage?.days ?: 30)
             AppTab.PullRequests -> loadPullRequests(force = true)
             else -> Unit
@@ -485,6 +741,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSearch(value: String) {
         state = state.copy(search = value)
+    }
+
+    fun toggleSettled() {
+        state = state.copy(showSettled = !state.showSettled)
     }
 
     fun toggleArchived() {
@@ -507,10 +767,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             thread = ThreadUi(threadId = threadId, summary = summary, loading = true),
         )
         threadJob = viewModelScope.launch {
-            val conn = connection ?: return@launch
             var feed: ThreadFeed? = null
             try {
                 while (isActive && state.activeThreadId == threadId) {
+                    val conn = connection
+                    if (conn == null) {
+                        delay(500)
+                        continue
+                    }
                     // Always start from a full snapshot. It fills the screen on
                     // first open and catches up on anything missed when a live
                     // subscription had to be replaced.
@@ -919,29 +1183,164 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun threadAction(threadId: String, action: String, value: String = "") {
         val conn = connection ?: return
+        applyLocalThreadAction(threadId, action, value)
+        when (action) {
+            "archive" -> if (state.activeThreadId == threadId) closeThread()
+            "delete" -> if (state.activeThreadId == threadId) closeThread()
+        }
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { conn.threadAction(threadId, action, value) }
                 when (action) {
-                    "archive" -> {
-                        if (state.activeThreadId == threadId) closeThread()
-                        toast("Thread archived")
-                    }
+                    "archive" -> toast("Thread archived")
                     "unarchive" -> toast("Thread restored")
-                    "delete" -> {
-                        if (state.activeThreadId == threadId) closeThread()
-                        toast("Thread deleted")
-                    }
+                    "delete" -> toast("Thread deleted")
                     "rename" -> toast("Thread renamed")
                     "pin" -> toast("Thread pinned")
                     "unpin" -> toast("Thread unpinned")
-                    "markRead", "markUnread", "settle", "unsettle" -> Unit
+                    "settle" -> toast("Thread settled")
+                    "unsettle" -> toast("Thread moved back to chats")
+                    "setModel" -> toast("Model changed")
+                    "markRead", "markUnread", "setRuntimeMode", "setInteractionMode" -> Unit
                 }
                 refresh()
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
                 toast(describe(error))
+                if (state.activeThreadId == threadId) refreshThread()
+                refresh()
             }
         }
+    }
+
+    /**
+     * Keep list and open-thread state in sync before the server round trip.
+     * The live snapshot reconciles immediately after the command succeeds.
+     */
+    private fun applyLocalThreadAction(threadId: String, action: String, value: String) {
+        val existing = state.summaryFor(threadId)
+            ?: state.thread?.summary?.takeIf { it.id == threadId }
+            ?: return
+        val now = Instant.now().toString()
+        var threads = state.threads
+        var archived = state.archivedThreads
+        var updated: ThreadShell? = existing
+
+        fun List<ThreadShell>.updatedThread(transform: (ThreadShell) -> ThreadShell) =
+            map { thread -> if (thread.id == threadId) transform(thread) else thread }
+
+        when (action) {
+            "archive" -> {
+                val next = existing.copy(archivedAt = now, updatedAt = now)
+                threads = threads.filterNot { it.id == threadId }
+                archived = archived.filterNot { it.id == threadId } + next
+                updated = next
+            }
+            "unarchive" -> {
+                val next = existing.copy(archivedAt = null, updatedAt = now)
+                archived = archived.filterNot { it.id == threadId }
+                threads = threads.filterNot { it.id == threadId } + next
+                updated = next
+            }
+            "delete" -> {
+                threads = threads.filterNot { it.id == threadId }
+                archived = archived.filterNot { it.id == threadId }
+                updated = null
+            }
+            "settle" -> {
+                val next = existing.copy(
+                    settledAt = now,
+                    settledOverride = "settled",
+                    unsettledAt = null,
+                    updatedAt = now,
+                )
+                threads = threads.updatedThread { next }
+                archived = archived.updatedThread { next }
+                updated = next
+            }
+            "unsettle" -> {
+                val next = existing.copy(
+                    settledAt = null,
+                    settledOverride = null,
+                    unsettledAt = now,
+                    updatedAt = now,
+                )
+                threads = threads.updatedThread { next }
+                archived = archived.updatedThread { next }
+                updated = next
+            }
+            "rename" -> {
+                val next = existing.copy(title = value, updatedAt = now)
+                threads = threads.updatedThread { next }
+                archived = archived.updatedThread { next }
+                updated = next
+            }
+            "pin" -> {
+                val next = existing.copy(pinnedAt = now, pinOrderKey = now, updatedAt = now)
+                threads = threads.updatedThread { next }
+                archived = archived.updatedThread { next }
+                updated = next
+            }
+            "unpin" -> {
+                val next = existing.copy(pinnedAt = null, pinOrderKey = null, updatedAt = now)
+                threads = threads.updatedThread { next }
+                archived = archived.updatedThread { next }
+                updated = next
+            }
+            "markRead" -> {
+                val next = existing.copy(lastVisitedAt = now)
+                threads = threads.updatedThread { next }
+                archived = archived.updatedThread { next }
+                updated = next
+            }
+            "markUnread" -> {
+                val next = existing.copy(lastVisitedAt = null)
+                threads = threads.updatedThread { next }
+                archived = archived.updatedThread { next }
+                updated = next
+            }
+            "setRuntimeMode" -> {
+                val next = existing.copy(runtimeMode = value, updatedAt = now)
+                threads = threads.updatedThread { next }
+                archived = archived.updatedThread { next }
+                updated = next
+            }
+            "setInteractionMode" -> {
+                val next = existing.copy(interactionMode = value, updatedAt = now)
+                threads = threads.updatedThread { next }
+                archived = archived.updatedThread { next }
+                updated = next
+            }
+            "setModel" -> {
+                val selection = runCatching {
+                    T3Core.json.decodeFromString<ModelSelection>(value)
+                }.getOrNull()
+                if (selection != null) {
+                    val next = existing.copy(modelSelection = selection, updatedAt = now)
+                    threads = threads.updatedThread { next }
+                    archived = archived.updatedThread { next }
+                    updated = next
+                }
+            }
+        }
+
+        val active = state.thread
+        val nextThread = active?.let { current ->
+            if (current.threadId != threadId || updated == null) {
+                current
+            } else {
+                current.copy(
+                    summary = updated,
+                    projection = current.projection.copy(thread = updated),
+                )
+            }
+        }
+        state = state.copy(
+            threads = threads,
+            archivedThreads = archived,
+            thread = nextThread,
+        )
     }
 
     fun attach(uri: Uri) {
@@ -1415,6 +1814,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         usageJob = null
         pullRequestsJob?.cancel()
         pullRequestsJob = null
+        shellRefreshJob?.cancel()
+        shellRefreshJob = null
+        modelsJob?.cancel()
+        modelsJob = null
         connection?.close()
         connection = null
     }

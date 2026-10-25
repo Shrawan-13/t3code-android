@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ErrorOutline
@@ -383,6 +384,77 @@ fun ErrorBanner(
                 IconButton(onClick = onDismiss, modifier = Modifier.size(34.dp)) {
                     Icon(Icons.Rounded.Close, contentDescription = "Dismiss", modifier = Modifier.size(18.dp))
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun ConnectionBanner(
+    status: ConnectionStatus,
+    environment: String,
+    note: String?,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (status == ConnectionStatus.Live) return
+    val offline = status == ConnectionStatus.Offline
+    val container = if (offline) {
+        MaterialTheme.colorScheme.errorContainer
+    } else {
+        MaterialTheme.colorScheme.secondaryContainer
+    }
+    val content = if (offline) {
+        MaterialTheme.colorScheme.onErrorContainer
+    } else {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    }
+    val title = when (status) {
+        ConnectionStatus.Offline -> "Can't reach $environment"
+        ConnectionStatus.Connecting -> "Connecting to $environment…"
+        else -> "Reconnecting to $environment…"
+    }
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = container,
+        contentColor = content,
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 13.dp, top = 8.dp, bottom = 8.dp, end = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (offline) {
+                Icon(
+                    Icons.Rounded.CloudOff,
+                    contentDescription = null,
+                    modifier = Modifier.size(19.dp),
+                )
+            } else {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = content,
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                if (!note.isNullOrBlank() && note != title) {
+                    Text(
+                        text = note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = content.copy(alpha = 0.78f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            TextButton(onClick = onRetry) {
+                Text(if (offline) "Retry" else "Retry now", color = content)
             }
         }
     }

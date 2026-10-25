@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.Inbox
 import androidx.compose.material.icons.rounded.MarkEmailRead
 import androidx.compose.material.icons.rounded.MarkEmailUnread
 import androidx.compose.material.icons.rounded.MoreVert
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -51,6 +53,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,6 +76,11 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
     var deleteThread by remember { mutableStateOf<ThreadShell?>(null) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
 
+    // Opening the Chats tab (or returning from a thread) should always show
+    // what is on the server right now, even if the live feed went silent while
+    // the app was in the background.
+    LaunchedEffect(Unit) { viewModel.refresh() }
+
     val projectsById = state.projects.associateBy { it.id }
     val query = state.search.trim()
     val filtered = state.threads.filter { thread ->
@@ -85,20 +93,22 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
     }
     val pinned = filtered.filter { it.pinnedAt != null }
     val chats = filtered.filter { it.pinnedAt == null && it.settledAt == null && !it.isArchived }
+    val archived = state.archivedThreads.filter { thread ->
+        val matchesProject = state.projectFilter == null ||
+            thread.projectId == state.projectFilter
+        val matchesSearch = query.isEmpty() ||
+            thread.title.contains(query, ignoreCase = true) ||
+            thread.latestVisibleMessage?.text?.contains(query, ignoreCase = true) == true
+        matchesProject && matchesSearch
+    }
     val settled = (
-        filtered.filter { it.settledAt != null || it.isArchived } +
-            state.archivedThreads.filter { thread ->
-                val matchesProject = state.projectFilter == null ||
-                    thread.projectId == state.projectFilter
-                val matchesSearch = query.isEmpty() ||
-                    thread.title.contains(query, ignoreCase = true) ||
-                    thread.latestVisibleMessage?.text?.contains(query, ignoreCase = true) == true
-                matchesProject && matchesSearch
-            }
+        filtered.filter { it.settledAt != null && !it.isArchived } +
+            if (state.showArchived) archived else emptyList()
         ).distinctBy { it.id }
     val selectedProject = state.projectFilter?.let { projectsById[it] }
     val filterCount = listOf(
         state.projectFilter != null,
+        !state.showSettled,
         state.showArchived,
     ).count { it }
 
@@ -113,6 +123,16 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
             },
             onSettings = { viewModel.selectTab(AppTab.Settings) },
         )
+
+        if (state.connectionStatus != ConnectionStatus.Live) {
+            ConnectionBanner(
+                status = state.connectionStatus,
+                environment = state.config?.environment?.label?.ifBlank { "the machine" } ?: "the machine",
+                note = state.connectionNote,
+                onRetry = viewModel::retryConnection,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
 
         AnimatedVisibility(visible = searchOpen || state.search.isNotBlank()) {
             TextField(
@@ -197,7 +217,9 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                 }
             }
 
-            if (filtered.isEmpty() && settled.isEmpty()) {
+            if (!state.shellLoaded && state.threads.isEmpty() && state.archivedThreads.isEmpty()) {
+                item { WorkingRow("Loading chats from ${state.config?.environment?.label ?: "the machine"}…") }
+            } else if (filtered.isEmpty() && settled.isEmpty()) {
                 item {
                     EmptyState(
                         icon = Icons.Rounded.Forum,
@@ -234,13 +256,13 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                         text = "Settled",
                         count = settled.size,
                         trailing = {
-                            TextButton(onClick = viewModel::toggleArchived) {
-                                Text(if (state.showArchived) "Hide" else "Show")
+                            TextButton(onClick = viewModel::toggleSettled) {
+                                Text(if (state.showSettled) "Hide" else "Show")
                             }
                         },
                     )
                 }
-                if (state.showArchived) {
+                if (state.showSettled) {
                     item {
                         ThreadGroup(
                             threads = settled,
@@ -324,6 +346,24 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Settled chats", style = MaterialTheme.typography.bodyLarge)
                         Text(
+                            text = "Show completed conversations in the list",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = state.showSettled,
+                        onCheckedChange = { viewModel.toggleSettled() },
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Archived chats", style = MaterialTheme.typography.bodyLarge)
+                        Text(
                             text = "Show archived conversations in the list",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -340,6 +380,7 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                         onClick = {
                             viewModel.setProjectFilter(null)
                             viewModel.setSearch("")
+                            if (!state.showSettled) viewModel.toggleSettled()
                             if (state.showArchived) viewModel.toggleArchived()
                         },
                         modifier = Modifier.weight(1f),
@@ -579,7 +620,7 @@ private fun ThreadRow(
     val projectTitle = project?.title?.ifBlank { project.workspaceRoot.substringAfterLast('/') }
         ?: "Project"
     val rightLabel = when {
-        settled -> "Done"
+        settled -> "Settled"
         status.tone == StatusTone.Error -> "Error"
         status.tone == StatusTone.Attention -> "Needs you"
         status.tone == StatusTone.Active -> "Working"
@@ -688,6 +729,21 @@ private fun ThreadRow(
                         onRename()
                     },
                 )
+                if (!thread.isArchived) {
+                    DropdownMenuItem(
+                        text = { Text(if (thread.settledAt != null) "Unsettle" else "Settle") },
+                        leadingIcon = {
+                            Icon(
+                                if (thread.settledAt != null) Icons.Rounded.Unarchive else Icons.Rounded.Inbox,
+                                contentDescription = null,
+                            )
+                        },
+                        onClick = {
+                            menuOpen = false
+                            onAction(if (thread.settledAt != null) "unsettle" else "settle", "")
+                        },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text(if (thread.isArchived) "Unarchive" else "Archive") },
                     leadingIcon = { Icon(Icons.Rounded.Archive, contentDescription = null) },

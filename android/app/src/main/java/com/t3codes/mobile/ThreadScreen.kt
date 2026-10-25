@@ -44,6 +44,8 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Difference
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Inbox
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PushPin
@@ -51,6 +53,7 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.Unarchive
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -93,6 +96,7 @@ import androidx.compose.ui.unit.dp
 import com.t3codes.core.ModelSelection
 import com.t3codes.core.Project
 import com.t3codes.core.RuntimeRequest
+import com.t3codes.core.ServerConfig
 import com.t3codes.core.T3Core
 import com.t3codes.core.ThreadShell
 import kotlinx.coroutines.flow.collect
@@ -130,12 +134,13 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
     var menuOpen by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var deleteOpen by remember { mutableStateOf(false) }
-    var modelPickerOpen by remember { mutableStateOf(false) }
     var runtimePickerOpen by remember { mutableStateOf(false) }
-    val modelChoices = remember(state.config) { state.config?.modelChoices().orEmpty() }
-    val currentSelection = summary?.modelSelection
     val runtimeMode = summary?.runtimeMode.orEmpty()
     val planMode = summary?.interactionMode == "plan"
+
+    LaunchedEffect(thread.threadId) {
+        viewModel.ensureModelsLoaded(force = false)
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -173,7 +178,19 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                                 style = MaterialTheme.typography.labelSmall,
                                 color = statusToneColor(status.tone),
                             )
-                            if (!thread.live && !thread.loading) {
+                            if (state.connectionStatus == ConnectionStatus.Reconnecting) {
+                                Text(
+                                    text = "· reconnecting",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                )
+                            } else if (state.connectionStatus == ConnectionStatus.Offline) {
+                                Text(
+                                    text = "· offline",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            } else if (!thread.live && !thread.loading) {
                                 Text(
                                     text = "· syncing",
                                     style = MaterialTheme.typography.labelSmall,
@@ -230,14 +247,6 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                                 },
                             )
                             DropdownMenuItem(
-                                text = { Text("Change model") },
-                                leadingIcon = { Icon(Icons.Rounded.AutoAwesome, contentDescription = null) },
-                                onClick = {
-                                    menuOpen = false
-                                    modelPickerOpen = true
-                                },
-                            )
-                            DropdownMenuItem(
                                 text = { Text("Run permissions") },
                                 leadingIcon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
                                 onClick = {
@@ -276,6 +285,27 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                                     )
                                 },
                             )
+                            if (summary?.isArchived != true) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(if (summary?.settledAt != null) "Unsettle" else "Settle")
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            if (summary?.settledAt != null) Icons.Rounded.Unarchive
+                                            else Icons.Rounded.Inbox,
+                                            contentDescription = null,
+                                        )
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        viewModel.threadAction(
+                                            thread.threadId,
+                                            if (summary?.settledAt != null) "unsettle" else "settle",
+                                        )
+                                    },
+                                )
+                            }
                             DropdownMenuItem(
                                 text = {
                                     Text(if (summary?.isArchived == true) "Unarchive" else "Archive")
@@ -313,6 +343,20 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                 thread = thread,
                 summary = summary,
                 running = running,
+                config = state.config,
+                modelsRefreshing = state.modelsRefreshing,
+                onRefreshModels = { viewModel.ensureModelsLoaded(force = true) },
+                onSelectModel = { choice ->
+                    val selection = ModelSelection(
+                        instanceId = choice.instanceId,
+                        model = choice.model.key,
+                    )
+                    viewModel.threadAction(
+                        thread.threadId,
+                        "setModel",
+                        T3Core.json.encodeToJsonElement(selection).toString(),
+                    )
+                },
                 onSend = viewModel::sendMessage,
                 onStop = viewModel::stopRun,
                 onAttach = viewModel::attach,
@@ -322,109 +366,52 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
             )
         },
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when {
-                thread.loading && rows.isEmpty() -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (state.connectionStatus != ConnectionStatus.Live) {
+                ConnectionBanner(
+                    status = state.connectionStatus,
+                    environment = state.config?.environment?.label?.ifBlank { "the machine" }
+                        ?: "the machine",
+                    note = state.connectionNote,
+                    onRetry = viewModel::retryConnection,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+            Box(modifier = Modifier.fillMaxSize().weight(1f)) {
+                when {
+                    thread.loading && rows.isEmpty() -> {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        }
                     }
-                }
-                thread.error != null && rows.isEmpty() -> {
-                    Column(
-                        modifier = Modifier.fillMaxSize().padding(24.dp),
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        ErrorBanner(message = thread.error, onRetry = viewModel::retryThread)
+                    thread.error != null && rows.isEmpty() -> {
+                        Column(
+                            modifier = Modifier.fillMaxSize().padding(24.dp),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            ErrorBanner(message = thread.error, onRetry = viewModel::retryThread)
+                        }
                     }
-                }
-                rows.isEmpty() && !running -> {
-                    EmptyState(
-                        icon = Icons.Rounded.AutoAwesome,
-                        title = "Say hello",
-                        message = "This thread is ready. Send a message to start the agent.",
-                    )
-                }
-                else -> {
-                    TimelineContent(
-                        thread = thread,
-                        rows = rows,
-                        running = running,
-                        pullRequests = pullRequests,
-                        onLoadEarlier = viewModel::loadEarlier,
-                    )
+                    rows.isEmpty() && !running -> {
+                        EmptyState(
+                            icon = Icons.Rounded.AutoAwesome,
+                            title = "Say hello",
+                            message = "This thread is ready. Send a message to start the agent.",
+                        )
+                    }
+                    else -> {
+                        TimelineContent(
+                            thread = thread,
+                            rows = rows,
+                            running = running,
+                            pullRequests = pullRequests,
+                            onLoadEarlier = viewModel::loadEarlier,
+                        )
+                    }
                 }
             }
         }
-    }
-
-    if (modelPickerOpen) {
-        AlertDialog(
-            onDismissRequest = { modelPickerOpen = false },
-            title = { Text("Change model") },
-            text = {
-                if (modelChoices.isEmpty()) {
-                    Text(
-                        text = "No models are available from the connected providers.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.heightIn(max = 420.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        items(modelChoices, key = { it.key }) { choice ->
-                            val selected = currentSelection?.instanceId == choice.instanceId &&
-                                currentSelection?.model == choice.model.key
-                            Surface(
-                                onClick = {
-                                    val selection = ModelSelection(
-                                        instanceId = choice.instanceId,
-                                        model = choice.model.key,
-                                    )
-                                    viewModel.threadAction(
-                                        thread.threadId,
-                                        "setModel",
-                                        T3Core.json.encodeToJsonElement(selection).toString(),
-                                    )
-                                    modelPickerOpen = false
-                                },
-                                shape = RoundedCornerShape(14.dp),
-                                color = if (selected) MaterialTheme.colorScheme.primaryContainer
-                                else Color.Transparent,
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = choice.model.label,
-                                            style = MaterialTheme.typography.labelLarge,
-                                        )
-                                        Text(
-                                            text = choice.providerName,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                    if (selected) {
-                                        Icon(
-                                            Icons.Rounded.Check,
-                                            contentDescription = "Selected",
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { modelPickerOpen = false }) { Text("Done") }
-            },
-        )
     }
 
     if (runtimePickerOpen) {
@@ -679,24 +666,6 @@ private fun UserBubble(entry: TimelineEntry) {
 @Composable
 private fun AssistantMessage(entry: TimelineEntry) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            BrandMark(size = 20.dp)
-            Spacer(Modifier.width(7.dp))
-            Text(
-                text = "T3",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            if (entry.streaming) {
-                Spacer(Modifier.width(7.dp))
-                Text(
-                    text = "writing…",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Spacer(Modifier.height(6.dp))
         if (entry.text.isBlank()) {
             WorkingRow("Thinking…")
         } else {
@@ -772,6 +741,10 @@ private fun ComposerColumn(
     thread: ThreadUi,
     summary: ThreadShell?,
     running: Boolean,
+    config: ServerConfig?,
+    modelsRefreshing: Boolean,
+    onRefreshModels: () -> Unit,
+    onSelectModel: (ModelChoice) -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onAttach: (android.net.Uri) -> Unit,
@@ -806,6 +779,10 @@ private fun ComposerColumn(
             thread = thread,
             summary = summary,
             running = running,
+            config = config,
+            modelsRefreshing = modelsRefreshing,
+            onRefreshModels = onRefreshModels,
+            onSelectModel = onSelectModel,
             onSend = onSend,
             onStop = onStop,
             onPickAttachment = { picker.launch("*/*") },
@@ -885,14 +862,28 @@ private fun Composer(
     thread: ThreadUi,
     summary: ThreadShell?,
     running: Boolean,
+    config: ServerConfig?,
+    modelsRefreshing: Boolean,
+    onRefreshModels: () -> Unit,
+    onSelectModel: (ModelChoice) -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onPickAttachment: () -> Unit,
     onRemoveAttachment: (com.t3codes.core.Attachment) -> Unit,
 ) {
     var text by rememberSaveable(thread.threadId) { mutableStateOf("") }
+    var modelMenuOpen by remember(thread.threadId) { mutableStateOf(false) }
     val canSend = text.isNotBlank() || thread.pendingAttachments.isNotEmpty()
-    val model = summary?.modelSelection?.model?.takeIf { it.isNotBlank() }
+    val modelChoices = remember(config) { config?.modelChoices().orEmpty() }
+    val currentSelection = summary?.modelSelection
+    val selectedChoice = modelChoices.firstOrNull { choice ->
+        choice.instanceId == currentSelection?.instanceId &&
+            (choice.model.key == currentSelection?.model ||
+                choice.model.id == currentSelection?.model ||
+                choice.model.slug == currentSelection?.model)
+    }
+    val modelLabel = selectedChoice?.model?.label
+        ?: currentSelection?.model?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
 
     Surface(
         modifier = Modifier
@@ -977,13 +968,113 @@ private fun Composer(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                if (!model.isNullOrBlank()) {
-                    Pill(
-                        text = model.substringAfterLast('/'),
-                        container = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        content = MaterialTheme.colorScheme.onSurfaceVariant,
-                        icon = Icons.Rounded.AutoAwesome,
-                    )
+                Box {
+                    Surface(
+                        onClick = {
+                            modelMenuOpen = true
+                            onRefreshModels()
+                        },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (modelsRefreshing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    strokeWidth = 1.6.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Rounded.AutoAwesome,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(13.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                text = modelLabel ?: if (modelsRefreshing) {
+                                    "Loading models…"
+                                } else {
+                                    "Model"
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(Modifier.width(3.dp))
+                            Icon(
+                                Icons.Rounded.KeyboardArrowDown,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = modelMenuOpen,
+                        onDismissRequest = { modelMenuOpen = false },
+                    ) {
+                        if (modelsRefreshing) {
+                            DropdownMenuItem(
+                                text = { Text("Loading models…") },
+                                leadingIcon = {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(15.dp),
+                                        strokeWidth = 1.8.dp,
+                                    )
+                                },
+                                onClick = {},
+                                enabled = false,
+                            )
+                        }
+                        if (modelChoices.isEmpty() && !modelsRefreshing) {
+                            DropdownMenuItem(
+                                text = { Text("Refresh models") },
+                                leadingIcon = { Icon(Icons.Rounded.Refresh, contentDescription = null) },
+                                onClick = onRefreshModels,
+                            )
+                        }
+                        modelChoices.forEach { choice ->
+                            val selected = currentSelection?.instanceId == choice.instanceId &&
+                                (currentSelection?.model == choice.model.key ||
+                                    currentSelection?.model == choice.model.slug)
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(
+                                            text = choice.model.label,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = choice.providerName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                trailingIcon = {
+                                    if (selected) {
+                                        Icon(
+                                            Icons.Rounded.Check,
+                                            contentDescription = "Selected",
+                                            modifier = Modifier.size(18.dp),
+                                            tint = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    modelMenuOpen = false
+                                    onSelectModel(choice)
+                                },
+                            )
+                        }
+                    }
                 }
                 Spacer(Modifier.weight(1f))
                 if (running) {

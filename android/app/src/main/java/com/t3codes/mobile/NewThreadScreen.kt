@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -78,8 +79,20 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
         project.workspaceRoot.substringAfterLast('/')
     } ?: "a project"
 
+    LaunchedEffect(Unit) {
+        viewModel.ensureModelsLoaded(force = choices.isEmpty())
+    }
+
     LaunchedEffect(projectId) {
         viewModel.setNewThreadProject(projectId)
+    }
+
+    LaunchedEffect(projectId, choices) {
+        if (choices.isEmpty()) {
+            modelKey = ""
+            return@LaunchedEffect
+        }
+        if (choices.any { it.key == modelKey }) return@LaunchedEffect
         val preferred = project?.defaultModelSelection
         val match = choices.firstOrNull { choice ->
             choice.instanceId == preferred?.instanceId &&
@@ -335,8 +348,11 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                         }
                         Box {
                             Surface(
-                                onClick = { if (choices.isNotEmpty()) modelMenuOpen = true },
-                                enabled = choices.isNotEmpty() && !state.launching,
+                                onClick = {
+                                    modelMenuOpen = true
+                                    viewModel.ensureModelsLoaded(force = choices.isEmpty())
+                                },
+                                enabled = !state.launching,
                                 shape = CircleShape,
                                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                             ) {
@@ -344,15 +360,27 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Icon(
-                                        Icons.Rounded.AutoAwesome,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(13.dp),
-                                        tint = MaterialTheme.colorScheme.primary,
-                                    )
+                                    if (state.modelsRefreshing) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(12.dp),
+                                            strokeWidth = 1.6.dp,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.Rounded.AutoAwesome,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(13.dp),
+                                            tint = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
                                     Spacer(Modifier.width(5.dp))
                                     Text(
-                                        text = selectedModel?.model?.label ?: "Choose model",
+                                        text = selectedModel?.model?.label ?: if (state.modelsRefreshing) {
+                                            "Loading models…"
+                                        } else {
+                                            "Choose model"
+                                        },
                                         style = MaterialTheme.typography.labelMedium,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -370,6 +398,28 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                                 expanded = modelMenuOpen,
                                 onDismissRequest = { modelMenuOpen = false },
                             ) {
+                                if (state.modelsRefreshing) {
+                                    DropdownMenuItem(
+                                        text = { Text("Loading models…") },
+                                        leadingIcon = {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(15.dp),
+                                                strokeWidth = 1.8.dp,
+                                            )
+                                        },
+                                        onClick = {},
+                                        enabled = false,
+                                    )
+                                }
+                                if (choices.isEmpty() && !state.modelsRefreshing) {
+                                    DropdownMenuItem(
+                                        text = { Text("Refresh models") },
+                                        leadingIcon = {
+                                            Icon(Icons.Rounded.Refresh, contentDescription = null)
+                                        },
+                                        onClick = { viewModel.ensureModelsLoaded(force = true) },
+                                    )
+                                }
                                 choices.forEach { choice ->
                                     DropdownMenuItem(
                                         text = {
