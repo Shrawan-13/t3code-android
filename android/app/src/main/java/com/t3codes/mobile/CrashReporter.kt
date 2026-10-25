@@ -44,12 +44,15 @@ object CrashReporter {
                     .commit()
             }
             runCatching { launchCrashScreen(application, file) }
-            if (previous != null) {
-                previous.uncaughtException(thread, error)
-            } else {
-                Process.killProcess(Process.myPid())
-                exitProcess(10)
-            }
+                .onFailure {
+                    // If the crash screen cannot start, fall back to Android's
+                    // default handler so the failure is not silent.
+                    if (previous != null) {
+                        previous.uncaughtException(thread, error)
+                    }
+                }
+            Process.killProcess(Process.myPid())
+            exitProcess(10)
         }
     }
 
@@ -90,7 +93,10 @@ object CrashReporter {
             putExtra(Intent.EXTRA_TEXT, "T3 Code Android crashed. The full log is attached.")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        val chooser = Intent.createChooser(send, "Share crash log")
+        val chooser = Intent.createChooser(send, "Share crash log").apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = ClipData.newRawUri("T3 Code Android crash log", uri)
+        }
         if (context !is android.app.Activity) {
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
