@@ -485,6 +485,24 @@ data class VcsStatus(
 )
 
 @Serializable
+data class GitRef(
+    val name: String = "",
+    val isRemote: Boolean = false,
+    val current: Boolean = false,
+    val isDefault: Boolean = false,
+    val worktreePath: String? = null,
+)
+
+@Serializable
+data class ListRefsResult(
+    val refs: List<GitRef> = emptyList(),
+    val isRepo: Boolean = false,
+    val hasPrimaryRemote: Boolean = false,
+    val nextCursor: Int? = null,
+    val totalCount: Int = 0,
+)
+
+@Serializable
 data class DiffFileStat(
     val path: String = "",
     val previousPath: String? = null,

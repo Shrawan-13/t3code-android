@@ -313,6 +313,21 @@ class T3Connection internal constructor(
             T3Core.ensureOk(Native.nativeVcsStatus(handle, cwd)).toString(),
         )
 
+    fun listRefs(
+        cwd: String,
+        query: String = "",
+        refKind: String = "",
+        limit: Int = 100,
+    ): ListRefsResult {
+        val payload = buildJsonObject {
+            put("cwd", cwd)
+            if (query.isNotBlank()) put("query", query)
+            if (refKind.isNotBlank()) put("refKind", refKind)
+            if (limit > 0) put("limit", limit)
+        }
+        return call("vcs.listRefs", payload)
+    }
+
     fun diffPreview(cwd: String): DiffPreview =
         T3Core.json.decodeFromString(
             T3Core.ensureOk(Native.nativeDiffPreview(handle, cwd)).toString(),

@@ -14,6 +14,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.t3codes.core.Attachment
 import com.t3codes.core.DiffPreview
+import com.t3codes.core.GitRef
 import com.t3codes.core.Model
 import com.t3codes.core.ModelSelection
 import com.t3codes.core.Project
@@ -173,6 +174,10 @@ data class UiState(
     val thread: ThreadUi? = null,
     val newThreadOpen: Boolean = false,
     val newThreadProjectId: String? = null,
+    val newThreadBranches: List<GitRef> = emptyList(),
+    val newThreadBranch: String = "",
+    val newThreadBranchesLoading: Boolean = false,
+    val newThreadBranchesError: String? = null,
     val launching: Boolean = false,
     val usage: UsageUi? = null,
     val terminal: TerminalUi? = null,
@@ -212,6 +217,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var shellRefreshJob: Job? = null
     private var reconnectJob: Job? = null
     private var modelsJob: Job? = null
+    private var branchesJob: Job? = null
     private var reconnectAttempts = 0
     private var lastProviderRefreshAt = 0L
     private var stoppedInBackground = false
@@ -1411,11 +1417,90 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeNewThread() {
-        state = state.copy(newThreadOpen = false)
+        branchesJob?.cancel()
+        branchesJob = null
+        state = state.copy(newThreadOpen = false, newThreadBranchesLoading = false)
     }
 
     fun setNewThreadProject(projectId: String) {
-        state = state.copy(newThreadProjectId = projectId)
+        if (state.newThreadProjectId != projectId) {
+            branchesJob?.cancel()
+            state = state.copy(
+                newThreadProjectId = projectId,
+                newThreadBranches = emptyList(),
+                newThreadBranch = "",
+                newThreadBranchesLoading = false,
+                newThreadBranchesError = null,
+            )
+        }
+        loadNewThreadBranches(projectId)
+    }
+
+    fun setNewThreadBranch(branch: String) {
+        if (state.newThreadBranch != branch) state = state.copy(newThreadBranch = branch)
+    }
+
+    /**
+     * Loads local and remote branches for the project checkout. Worktree
+     * launches must send a non-empty baseRef, so the New thread screen can only
+     * enable "New worktree" once a base branch is known.
+     */
+    fun loadNewThreadBranches(projectId: String = state.newThreadProjectId.orEmpty()) {
+        val project = state.projects.firstOrNull { it.id == projectId } ?: return
+        val cwd = project.workspaceRoot.trim()
+        if (cwd.isEmpty()) {
+            state = state.copy(
+                newThreadBranches = emptyList(),
+                newThreadBranch = "",
+                newThreadBranchesLoading = false,
+                newThreadBranchesError = "This project has no workspace path.",
+            )
+            return
+        }
+        val conn = connection ?: return
+        if (state.newThreadBranchesLoading) return
+        branchesJob?.cancel()
+        state = state.copy(
+            newThreadBranchesLoading = true,
+            newThreadBranchesError = null,
+        )
+        branchesJob = viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    conn.listRefs(cwd = cwd, limit = 200)
+                }
+                if (state.newThreadProjectId != projectId) return@launch
+                val refs = result.refs.filter { it.name.isNotBlank() }
+                val preferred = refs.firstOrNull { it.isDefault }?.name
+                    ?: refs.firstOrNull { it.current }?.name
+                    ?: refs.firstOrNull { !it.isRemote }?.name
+                    ?: refs.firstOrNull()?.name
+                    ?: ""
+                val keep = state.newThreadBranch.takeIf { branch ->
+                    refs.any { it.name == branch }
+                }
+                state = state.copy(
+                    newThreadBranches = refs,
+                    newThreadBranch = keep ?: preferred,
+                    newThreadBranchesLoading = false,
+                    newThreadBranchesError = when {
+                        !result.isRepo -> "This project is not a git repository."
+                        refs.isEmpty() -> "No branches were found in this repository."
+                        else -> null
+                    },
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                if (state.newThreadProjectId != projectId) return@launch
+                state = state.copy(
+                    newThreadBranches = emptyList(),
+                    newThreadBranch = "",
+                    newThreadBranchesLoading = false,
+                    newThreadBranchesError = "Could not load branches. ${describe(error)}",
+                )
+            }
+        }
     }
 
     fun launchThread(
@@ -1424,9 +1509,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         selection: ModelSelection,
         initialText: String,
         workspaceType: String = "root",
+        baseRef: String = "",
     ) {
         if (state.launching) return
         val conn = connection ?: return
+        val workspace = if (workspaceType == "worktree") {
+            if (baseRef.isBlank()) {
+                toast("Choose a base branch before creating a worktree.")
+                return
+            }
+            WorkspaceStrategy(type = "worktree", baseRef = baseRef)
+        } else {
+            WorkspaceStrategy(type = workspaceType)
+        }
         state = state.copy(launching = true, error = null)
         viewModelScope.launch {
             try {
@@ -1438,7 +1533,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         projectId = projectId,
                         title = resolvedTitle,
                         modelSelection = selection,
-                        workspace = WorkspaceStrategy(type = workspaceType),
+                        workspace = workspace,
                         initialText = initialText.trim().ifEmpty { null },
                     )
                 }

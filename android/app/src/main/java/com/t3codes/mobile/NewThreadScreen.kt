@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AccountTree
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -71,6 +72,7 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
     var projectMenuOpen by remember { mutableStateOf(false) }
     var modelMenuOpen by remember { mutableStateOf(false) }
     var workspaceMenuOpen by remember { mutableStateOf(false) }
+    var branchMenuOpen by remember { mutableStateOf(false) }
 
     val project = state.projects.firstOrNull { it.id == projectId }
     val selectedModel = choices.firstOrNull { it.key == modelKey }
@@ -85,6 +87,14 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
 
     LaunchedEffect(projectId) {
         viewModel.setNewThreadProject(projectId)
+    }
+
+    LaunchedEffect(state.projects, projectId) {
+        if (projectId.isBlank()) {
+            val fallback = state.newThreadProjectId
+                ?: state.projects.firstOrNull()?.id.orEmpty()
+            if (fallback.isNotBlank()) projectId = fallback
+        }
     }
 
     LaunchedEffect(projectId, choices) {
@@ -107,7 +117,8 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
     val canStart = !state.launching &&
         projectId.isNotBlank() &&
         selectedModel != null &&
-        message.isNotBlank()
+        message.isNotBlank() &&
+        (workspaceType != "worktree" || state.newThreadBranch.isNotBlank())
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
@@ -294,6 +305,133 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                 }
             }
 
+            if (project != null && workspaceType == "worktree") {
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 2.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { branchMenuOpen = true }
+                            .padding(horizontal = 10.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Rounded.AccountTree,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Base branch",
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            Text(
+                                text = when {
+                                    state.newThreadBranchesLoading -> "Loading branches…"
+                                    state.newThreadBranchesError != null -> state.newThreadBranchesError.orEmpty()
+                                    state.newThreadBranch.isNotBlank() -> state.newThreadBranch
+                                    else -> "Choose a base branch"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (state.newThreadBranchesError != null) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (state.newThreadBranchesLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(15.dp),
+                                strokeWidth = 1.8.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        } else {
+                            Icon(
+                                Icons.Rounded.KeyboardArrowDown,
+                                contentDescription = "Choose base branch",
+                                modifier = Modifier.size(19.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = branchMenuOpen,
+                        onDismissRequest = { branchMenuOpen = false },
+                    ) {
+                        if (state.newThreadBranchesError != null) {
+                            DropdownMenuItem(
+                                text = { Text("Retry loading branches") },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.Refresh, contentDescription = null)
+                                },
+                                onClick = {
+                                    viewModel.loadNewThreadBranches(projectId)
+                                },
+                            )
+                        }
+                        if (state.newThreadBranchesLoading) {
+                            DropdownMenuItem(
+                                text = { Text("Loading branches…") },
+                                leadingIcon = {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(15.dp),
+                                        strokeWidth = 1.8.dp,
+                                    )
+                                },
+                                onClick = {},
+                                enabled = false,
+                            )
+                        }
+                        state.newThreadBranches.forEach { ref ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(
+                                            text = ref.name,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        val detail = when {
+                                            ref.current -> "Current branch"
+                                            ref.isRemote -> "Remote branch"
+                                            ref.isDefault -> "Default branch"
+                                            else -> null
+                                        }
+                                        if (detail != null) {
+                                            Text(
+                                                text = detail,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                },
+                                trailingIcon = {
+                                    if (ref.name == state.newThreadBranch) {
+                                        Icon(
+                                            Icons.Rounded.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp),
+                                            tint = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    viewModel.setNewThreadBranch(ref.name)
+                                    branchMenuOpen = false
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -467,6 +605,7 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                                     ),
                                     initialText = message,
                                     workspaceType = workspaceType,
+                                    baseRef = if (workspaceType == "worktree") state.newThreadBranch else "",
                                 )
                             },
                             enabled = canStart,
