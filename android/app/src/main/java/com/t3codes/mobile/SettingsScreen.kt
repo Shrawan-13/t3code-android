@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BarChart
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Code
@@ -48,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -59,6 +61,8 @@ fun SettingsScreen(state: UiState, viewModel: MainViewModel) {
     val environment = config.environment
     var confirmDisconnect by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
+    val latestCrash = remember { CrashReporter.latest(context) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -226,6 +230,17 @@ fun SettingsScreen(state: UiState, viewModel: MainViewModel) {
         item { SectionLabel("Diagnostics") }
         item {
             GroupedCard {
+                SettingsRow(
+                    icon = Icons.Rounded.BugReport,
+                    title = "Crash reports",
+                    subtitle = latestCrash?.let {
+                        "Open the latest log and share it with the developer"
+                    } ?: "No crash logs on this device",
+                    onClick = latestCrash?.let { file ->
+                        { CrashReporter.launchCrashScreen(context, file) }
+                    },
+                )
+                InsetDivider(start = 58.dp)
                 SettingsRow(
                     icon = Icons.Rounded.CheckCircle,
                     title = "Core self-test",

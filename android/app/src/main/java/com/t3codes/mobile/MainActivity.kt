@@ -9,6 +9,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val pendingCrash = CrashReporter.takePending(this)
+        if (pendingCrash != null) {
+            CrashReporter.launchCrashScreen(this, pendingCrash)
+            finish()
+            return
+        }
         enableEdgeToEdge()
         setContent {
             val viewModel: MainViewModel = viewModel()
