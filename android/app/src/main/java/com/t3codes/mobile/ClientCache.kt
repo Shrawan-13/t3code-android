@@ -48,7 +48,7 @@ class ClientCache(context: Context) {
                     shell = loadShell(baseUrl, stored.environmentId),
                 ) to configFile.lastModified()
             }
-            .maxByOrNull { it.second }
+            ?.maxByOrNull { it.second }
         matches?.first
     }.getOrNull()
 
