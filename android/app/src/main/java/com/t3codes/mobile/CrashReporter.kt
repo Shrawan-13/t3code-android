@@ -56,15 +56,12 @@ object CrashReporter {
         }
     }
 
-    fun launchCrashScreen(context: Context, file: File?) {
+    fun launchCrashScreen(context: Context, file: File?, replaceTask: Boolean = true) {
         context.startActivity(
             Intent(context, CrashActivity::class.java).apply {
                 if (file != null) putExtra(CrashActivity.EXTRA_CRASH_PATH, file.absolutePath)
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TASK or
-                        Intent.FLAG_ACTIVITY_NO_ANIMATION,
-                )
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                if (replaceTask) addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
             },
         )
     }

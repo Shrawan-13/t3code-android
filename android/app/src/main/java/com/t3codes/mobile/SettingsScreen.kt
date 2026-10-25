@@ -237,7 +237,13 @@ fun SettingsScreen(state: UiState, viewModel: MainViewModel) {
                         "Open the latest log and share it with the developer"
                     } ?: "No crash logs on this device",
                     onClick = latestCrash?.let { file ->
-                        { CrashReporter.launchCrashScreen(context, file) }
+                        {
+                            CrashReporter.launchCrashScreen(
+                                context = context,
+                                file = file,
+                                replaceTask = false,
+                            )
+                        }
                     },
                 )
                 InsetDivider(start = 58.dp)
