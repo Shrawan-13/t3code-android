@@ -136,6 +136,8 @@ class BackgroundSyncService : Service() {
                     throw error
                 } catch (error: Throwable) {
                     Log.w(LOG_TAG, "background sync disconnected", error)
+                    watchers.values.forEach { it.cancel() }
+                    watchers.clear()
                     if (isActive) updatePersistent(reconnecting = true)
                 } finally {
                     if (connection === next) connection = null

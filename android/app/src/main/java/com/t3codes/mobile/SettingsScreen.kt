@@ -65,8 +65,6 @@ import com.t3codes.core.Provider
 
 @Composable
 fun SettingsScreen(state: UiState, viewModel: MainViewModel) {
-    val config = state.config ?: return
-    val environment = config.environment
     var confirmDisconnect by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
@@ -98,6 +96,8 @@ fun SettingsScreen(state: UiState, viewModel: MainViewModel) {
             viewModel.setBackgroundSync(true)
         }
     }
+    val config = state.config ?: return
+    val environment = config.environment
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
