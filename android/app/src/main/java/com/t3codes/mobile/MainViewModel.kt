@@ -96,6 +96,7 @@ data class ThreadUi(
     val historyCursor: String? = null,
     val loadingEarlier: Boolean = false,
     val sequence: Long = 0,
+    val committedSequence: Long = 0,
     val live: Boolean = false,
     val pendingUserItems: List<VisibleTurnItem> = emptyList(),
 )
@@ -244,7 +245,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var reconnectAttempts = 0
     private var lastProviderRefreshAt = 0L
     private var lastShellCacheAt = 0L
-    private var lastThreadCacheAt = 0L
+    private val lastThreadCacheAt = mutableMapOf<String, Long>()
     private var cachedEnvironmentId: String? = null
     private var stoppedInBackground = false
 
@@ -691,19 +692,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun cacheThread(snapshot: ThreadDetailSnapshot, threadId: String, force: Boolean) {
-        if (snapshot.projection.thread.activeRunId != null) return
+    private fun cacheThread(
+        snapshot: ThreadDetailSnapshot,
+        threadId: String,
+        force: Boolean,
+        olderItems: List<VisibleTurnItem>? = null,
+    ) {
         val config = state.config ?: return
         val environmentId = config.environment.environmentId.ifBlank {
             cachedEnvironmentId.orEmpty()
         }
         if (environmentId.isBlank()) return
         val now = SystemClock.elapsedRealtime()
-        if (!force && now - lastThreadCacheAt < 4_000L) return
-        lastThreadCacheAt = now
+        val previous = lastThreadCacheAt[threadId] ?: 0L
+        if (!force && now - previous < 4_000L) return
+        lastThreadCacheAt[threadId] = now
         val base = state.baseUrl
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { clientCache.saveThread(base, environmentId, threadId, snapshot) }
+            runCatching {
+                clientCache.saveThread(base, environmentId, threadId, snapshot, olderItems)
+            }
         }
     }
 
@@ -1153,16 +1161,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         threadJob = viewModelScope.launch {
             var feed: ThreadFeed? = null
             try {
-                // Paint the last saved transcript before asking the server.
+                // Paint the canonical saved transcript before asking the server.
+                // Its stored sequence doubles as the resume cursor, so the first
+                // subscription can replay only what this device missed.
+                var resumeSequence = -1L
+                var markedRead = false
                 val environmentId = currentEnvironmentId()
                 if (environmentId != null) {
                     val cached = withContext(Dispatchers.IO) {
-                        clientCache.loadThread(state.baseUrl, environmentId, threadId)
+                        clientCache.loadThreadWithHistory(state.baseUrl, environmentId, threadId)
                     }
                     if (cached != null && isActive && state.activeThreadId == threadId) {
                         val current = state.thread
                         if (current != null && current.projection.thread.id.isEmpty()) {
-                            applyThreadDetail(threadId, cached)
+                            applyThreadDetail(threadId, cached.snapshot)
+                            if (cached.olderItems.isNotEmpty()) {
+                                val latest = state.thread
+                                if (latest?.threadId == threadId) {
+                                    state = state.copy(
+                                        thread = latest.copy(olderItems = cached.olderItems),
+                                    )
+                                }
+                            }
+                            if (cached.snapshot.snapshotSequence > 0) {
+                                resumeSequence = cached.snapshot.snapshotSequence
+                            }
                         }
                     }
                 }
@@ -1172,50 +1195,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         delay(500)
                         continue
                     }
-                    // Always start from a full snapshot. It fills the screen on
-                    // first open and catches up on anything missed when a live
-                    // subscription had to be replaced.
-                    val detail = withContext(Dispatchers.IO) { conn.thread(threadId) }
-                    if (!isActive || state.activeThreadId != threadId) return@launch
-                    applyThreadDetail(threadId, detail)
-                    if (state.thread?.threadId == threadId) {
+
+                    var next: ThreadFeed? = null
+                    if (resumeSequence < 0) {
+                        // No usable cursor: take the authoritative snapshot.
+                        val detail = withContext(Dispatchers.IO) { conn.thread(threadId) }
+                        if (!isActive || state.activeThreadId != threadId) return@launch
+                        applyThreadDetail(threadId, detail)
+                        resumeSequence = detail.snapshotSequence
+                        next = try {
+                            withContext(Dispatchers.IO) {
+                                conn.watchThread(threadId, detail.snapshotSequence, false)
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Throwable) {
+                            Log.w(LOG_TAG, "thread subscribe failed for $threadId", error)
+                            reportThreadLiveError(threadId, error)
+                            delay(1_000)
+                            continue
+                        }
+                    } else {
+                        // Warm cache: subscribe after the stored sequence. The
+                        // server sends a snapshot only if it cannot replay.
+                        next = try {
+                            withContext(Dispatchers.IO) {
+                                conn.watchThread(threadId, resumeSequence, false)
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Throwable) {
+                            Log.w(LOG_TAG, "thread resume failed for $threadId", error)
+                            resumeSequence = -1L
+                            delay(500)
+                            continue
+                        }
+                    }
+
+                    if (!isActive || state.activeThreadId != threadId) {
+                        runCatching { next?.close() }
+                        return@launch
+                    }
+                    val opened = next ?: continue
+                    if (!markedRead) {
+                        markedRead = true
                         runCatching {
                             withContext(Dispatchers.IO) { conn.threadAction(threadId, "markRead") }
                         }
                     }
-                    val next = try {
-                        withContext(Dispatchers.IO) {
-                            conn.watchThread(threadId, detail.snapshotSequence, false)
-                        }
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Throwable) {
-                        Log.w(LOG_TAG, "thread subscribe failed for $threadId", error)
-                        if (state.activeThreadId == threadId) {
-                            state = state.copy(
-                                thread = state.thread?.copy(
-                                    loading = false,
-                                    live = false,
-                                    error = "Live updates unavailable: ${describe(error)}",
-                                ),
-                            )
-                        }
-                        delay(1_000)
-                        continue
-                    }
-                    if (!isActive || state.activeThreadId != threadId) {
-                        runCatching { next.close() }
-                        return@launch
-                    }
-                    feed = next
-                    threadFeed = next
+                    feed = opened
+                    threadFeed = opened
                     setThreadLive(threadId, true)
-                    Log.d(LOG_TAG, "thread feed open $threadId after=${detail.snapshotSequence}")
+                    Log.d(LOG_TAG, "thread feed open $threadId after=$resumeSequence")
 
                     var stateFailures = 0
                     var eventCount = 0
                     var lastStateAt = 0L
                     var lastEventAt = SystemClock.elapsedRealtime()
+                    var lastAppliedSequence = resumeSequence
                     // If a subscription is open but silent (proxy, server or
                     // mobile network hiccup), catch up while work is active.
                     val watchdog = launch {
@@ -1238,7 +1275,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                     try {
-                        next.events.collect { event ->
+                        opened.events.collect { event ->
                             if (!isActive || state.activeThreadId != threadId) return@collect
                             lastEventAt = SystemClock.elapsedRealtime()
                             eventCount++
@@ -1249,6 +1286,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         "event#$eventCount id=$threadId",
                                 )
                             }
+                            if (event.kind == "event" &&
+                                event.sequence > 0 &&
+                                lastAppliedSequence > event.sequence
+                            ) {
+                                return@collect
+                            }
                             event.snapshot?.let { snapshot ->
                                 if (snapshot.projection.thread.id == threadId) {
                                     applyThreadProjection(
@@ -1256,33 +1299,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         snapshot.projection,
                                         snapshot.sequence,
                                     )
+                                    lastAppliedSequence = maxOf(
+                                        lastAppliedSequence,
+                                        snapshot.sequence,
+                                    )
                                 }
                             }
                             val eventType = event.event.domainEventType()
+                            var forceReconcile = false
                             event.event?.let { domainEvent ->
                                 val current = state.thread
                                     ?.takeIf { it.threadId == threadId }
                                     ?.projection
                                     ?: return@let
+                                // A sequence jump means events were dropped. Do
+                                // not persist a projection with a hole in it;
+                                // reconcile from state before advancing the
+                                // resume cursor.
+                                val gap = lastAppliedSequence >= 0 &&
+                                    event.sequence > 0 &&
+                                    event.sequence > lastAppliedSequence + 1
+                                forceReconcile = gap
                                 applyThreadProjection(
                                     threadId,
                                     current.applyDomainEvent(domainEvent),
                                     event.sequence,
+                                    persist = !gap && event.sequence > 0,
                                 )
+                                if (!gap && event.sequence > 0) {
+                                    lastAppliedSequence = maxOf(lastAppliedSequence, event.sequence)
+                                }
                             }
 
                             // Token-sized turn updates are already applied from
                             // their payloads above. Reading the whole projection
                             // for every token is expensive on long threads, so
                             // reconcile with the authoritative state at most
-                            // a few times per second.
+                            // a few times per second. A detected gap always
+                            // reconciles immediately.
                             val now = SystemClock.elapsedRealtime()
                             val tokenUpdate = eventType == "turn-item.updated" ||
                                 eventType == "message.updated"
-                            if (!tokenUpdate || now - lastStateAt >= 750L) {
+                            if (forceReconcile || !tokenUpdate || now - lastStateAt >= 750L) {
                                 lastStateAt = now
                                 val snapshot = withContext(Dispatchers.IO) {
-                                    runCatching { next.state() }
+                                    runCatching { opened.state() }
                                         .onFailure {
                                             Log.w(LOG_TAG, "thread state failed for $threadId", it)
                                         }
@@ -1293,7 +1354,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     applyThreadProjection(
                                         threadId,
                                         snapshot.projection,
-                                        maxOf(event.sequence, snapshot.sequence),
+                                        snapshot.sequence,
+                                    )
+                                    lastAppliedSequence = maxOf(
+                                        lastAppliedSequence,
+                                        snapshot.sequence,
                                     )
                                 } else {
                                     stateFailures++
@@ -1331,6 +1396,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     if (!isActive || state.activeThreadId != threadId) return@launch
+                    resumeSequence = state.thread
+                        ?.takeIf { it.threadId == threadId }
+                        ?.sequence
+                        ?.takeIf { it > 0 }
+                        ?: -1L
                     Log.d(LOG_TAG, "thread feed ended, reconnecting $threadId")
                     delay(1_000)
                 }
@@ -1373,13 +1443,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 historyCursor = detail.historyCursor ?: latest.historyCursor,
             )
         }
-        cacheThread(detail, threadId, force = false)
     }
 
     private fun applyThreadProjection(
         threadId: String,
         projection: ThreadProjection,
         sequence: Long,
+        persist: Boolean = true,
         extra: (ThreadUi) -> ThreadUi = { it },
     ) {
         val current = state.thread ?: return
@@ -1405,14 +1475,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             loading = false,
             error = null,
             sequence = maxOf(current.sequence, sequence),
+            committedSequence = if (persist) maxOf(current.committedSequence, sequence)
+            else current.committedSequence,
             pendingUserItems = pending,
         )
         val applied = extra(latest)
         state = state.copy(thread = applied)
-        if (projection.thread.activeRunId == null && projection.thread.id.isNotEmpty()) {
+        if (persist && projection.thread.id.isNotEmpty() && sequence >= current.committedSequence) {
             cacheThread(
                 ThreadDetailSnapshot(
-                    snapshotSequence = applied.sequence,
+                    snapshotSequence = sequence,
                     projection = projection,
                     historyCursor = applied.historyCursor,
                     hasMoreHistory = applied.hasMoreHistory,
@@ -1435,6 +1507,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun reportThreadLiveError(threadId: String, error: Throwable) {
+        if (state.activeThreadId != threadId) return
+        state = state.copy(
+            thread = state.thread?.copy(
+                loading = false,
+                live = false,
+                error = "Live updates unavailable: ${describe(error)}",
+            ),
+        )
+    }
+
     private fun scheduleThreadReconcile(conn: T3Connection, threadId: String) {
         if (threadReconcileJob?.isActive == true) return
         threadReconcileJob = viewModelScope.launch {
@@ -1446,23 +1529,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun closeThread() {
+    fun closeThread(persist: Boolean = true) {
         val current = state.thread
         val environmentId = currentEnvironmentId()
-        if (current != null &&
+        if (persist &&
+            current != null &&
             current.projection.thread.id.isNotEmpty() &&
-            current.projection.thread.activeRunId == null &&
+            current.committedSequence > 0 &&
+            current.sequence <= current.committedSequence &&
             environmentId != null
         ) {
             val snapshot = ThreadDetailSnapshot(
-                snapshotSequence = current.sequence,
+                snapshotSequence = current.committedSequence,
                 projection = current.projection,
                 historyCursor = current.historyCursor,
                 hasMoreHistory = current.hasMoreHistory,
             )
             val base = state.baseUrl
+            val olderItems = current.olderItems
             viewModelScope.launch(Dispatchers.IO) {
-                runCatching { clientCache.saveThread(base, environmentId, current.threadId, snapshot) }
+                runCatching {
+                    clientCache.saveThread(
+                        base,
+                        environmentId,
+                        current.threadId,
+                        snapshot,
+                        olderItems,
+                    )
+                }
             }
         }
         threadJob?.cancel()
@@ -1495,14 +1589,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val merged = (page.items + latest.olderItems)
                     .distinctBy { it.item.id }
                     .filterNot { it.item.id in visibleIds }
-                state = state.copy(
-                    thread = latest.copy(
-                        olderItems = merged,
-                        hasMoreHistory = page.hasMoreHistory,
-                        historyCursor = page.nextCursor,
-                        loadingEarlier = false,
-                    ),
+                val updated = latest.copy(
+                    olderItems = merged,
+                    hasMoreHistory = page.hasMoreHistory,
+                    historyCursor = page.nextCursor,
+                    loadingEarlier = false,
                 )
+                state = state.copy(thread = updated)
+                val environmentId = currentEnvironmentId()
+                if (environmentId != null) {
+                    val snapshot = ThreadDetailSnapshot(
+                        snapshotSequence = updated.committedSequence,
+                        projection = updated.projection,
+                        historyCursor = updated.historyCursor,
+                        hasMoreHistory = updated.hasMoreHistory,
+                    )
+                    val base = state.baseUrl
+                    viewModelScope.launch(Dispatchers.IO) {
+                        runCatching {
+                            clientCache.saveThread(
+                                base,
+                                environmentId,
+                                updated.threadId,
+                                snapshot,
+                                merged,
+                            )
+                        }
+                    }
+                }
             } catch (error: Throwable) {
                 val latest = state.thread ?: return@launch
                 state = state.copy(thread = latest.copy(loadingEarlier = false, error = describe(error)))
@@ -1620,7 +1734,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         applyLocalThreadAction(threadId, action, value)
         when (action) {
             "archive" -> if (state.activeThreadId == threadId) closeThread()
-            "delete" -> if (state.activeThreadId == threadId) closeThread()
+            "delete" -> if (state.activeThreadId == threadId) closeThread(persist = false)
         }
         viewModelScope.launch {
             try {
@@ -2463,6 +2577,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         stopAllStreams()
+        clientCache.close()
         super.onCleared()
     }
 
