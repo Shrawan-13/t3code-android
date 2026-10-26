@@ -917,14 +917,17 @@ private fun UserInputCard(
         if (missing.isNotEmpty()) {
             drafts = drafts + missing.associate { question ->
                 val initial = question.initialAnswer.orEmpty()
+                val useCustom = initial.isNotBlank() && question.allowCustomAnswer != false
                 val matchingOption = question.options.firstOrNull { option ->
                     option.value == initial || option.label == initial
                 }
                 question.id to UserInputDraft(
-                    selected = matchingOption?.let {
-                        setOf(it.value ?: it.label)
-                    }.orEmpty(),
-                    custom = if (matchingOption == null && initial.isNotBlank()) initial else "",
+                    selected = if (useCustom) {
+                        emptySet()
+                    } else {
+                        matchingOption?.let { setOf(it.value ?: it.label) }.orEmpty()
+                    },
+                    custom = if (useCustom) initial else "",
                 )
             }
         }
