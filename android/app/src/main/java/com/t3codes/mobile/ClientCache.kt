@@ -51,15 +51,27 @@ class ClientCache(context: Context) {
     private val appContext = context.applicationContext
     private val database = CacheDatabase(appContext)
 
+    @Volatile
+    private var legacyStoreRemoved = false
+
     init {
-        // The previous implementation wrote one JSON file per snapshot. It is
-        // superseded by the database and would otherwise sit on disk forever.
-        runCatching { File(appContext.filesDir, "client-cache").deleteRecursively() }
         runCatching { database.setWriteAheadLoggingEnabled(true) }
+    }
+
+    /**
+     * The previous implementation wrote one JSON file per snapshot. It is
+     * superseded by the database and would otherwise sit on disk forever.
+     * Callers reach this from a background dispatcher, never the main thread.
+     */
+    private fun removeLegacyStore() {
+        if (legacyStoreRemoved) return
+        legacyStoreRemoved = true
+        runCatching { File(appContext.filesDir, "client-cache").deleteRecursively() }
     }
 
     /** Finds the newest cached environment for a base URL without knowing its id yet. */
     fun loadSession(baseUrl: String): RestoredSession? = runCatching {
+        removeLegacyStore()
         val base = normalize(baseUrl)
         val environmentId = database.readableDatabase.rawQuery(
             "SELECT environment_id FROM environments WHERE base_url = ? " +
@@ -92,6 +104,7 @@ class ClientCache(context: Context) {
 
     fun saveConfig(baseUrl: String, environmentId: String, config: ServerConfig) {
         if (environmentId.isBlank()) return
+        removeLegacyStore()
         runCatching {
             val db = database.writableDatabase
             val now = System.currentTimeMillis()
