@@ -818,7 +818,7 @@ fun AddProjectScreen(state: UiState, viewModel: MainViewModel) {
                                             .orEmpty()
                                             .ifBlank { cloneTitleFromUrl(remoteUrl) }
                                     }
-                                    if (state.config?.capabilities?.projectCloneTracking == true) {
+                                    if (state.config?.environment?.capabilities?.projectCloneTracking == true) {
                                         val projectId = UUID.randomUUID().toString()
                                         val started = viewModel.startProjectClone(
                                             projectId = projectId,

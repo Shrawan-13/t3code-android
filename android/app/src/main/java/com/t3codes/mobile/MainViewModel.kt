@@ -2243,7 +2243,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun startProjectCloneWatch() {
         if (projectCloneJob?.isActive == true) return
         val conn = connection ?: return
-        if (conn.config.capabilities.projectCloneTracking != true) return
+        if (conn.config.environment.capabilities.projectCloneTracking != true) return
         projectCloneJob?.cancel()
         projectCloneJob = viewModelScope.launch {
             var attempts = 0
