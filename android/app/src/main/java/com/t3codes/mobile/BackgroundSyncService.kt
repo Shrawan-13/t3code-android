@@ -4,6 +4,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.app.PendingIntent
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
@@ -59,6 +60,11 @@ class BackgroundSyncService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            AppPreferences.of(this).edit().putBoolean(AppPreferences.BACKGROUND_SYNC, false).apply()
+            stopSelf()
+            return START_NOT_STICKY
+        }
         T3Notifications.ensureChannels(this)
         try {
             startForegroundCompat()
@@ -328,7 +334,7 @@ class BackgroundSyncService : Service() {
     private fun notifyInput(thread: ThreadShell, kind: String) {
         if (!shouldAlert()) return
         val request = thread.pendingRuntimeRequest ?: return
-        val isQuestion = kind == "user_input"
+        val isQuestion = kind == "user_input" || kind == "user-input"
         val label = if (isQuestion) "Input needed" else "Approval needed"
         val body = if (isQuestion) {
             "The agent is waiting for your answer."
@@ -354,6 +360,14 @@ class BackgroundSyncService : Service() {
     private fun shouldAlert(): Boolean =
         !AppVisibility.foreground && T3Notifications.canPost(this)
 
+    private fun stopPendingIntent(): PendingIntent =
+        PendingIntent.getService(
+            this,
+            1,
+            Intent(this, BackgroundSyncService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
     private fun updatePersistent(activeCount: Int = previousActive.size, reconnecting: Boolean = false) {
         if (!foregroundStarted) return
         val text = when {
@@ -372,6 +386,7 @@ class BackgroundSyncService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(T3Notifications.contentIntent(this))
+            .addAction(0, "Stop", stopPendingIntent())
             .build()
         NotificationManagerCompat.from(this).notify(SERVICE_NOTIFICATION_ID, notification)
     }
@@ -387,6 +402,7 @@ class BackgroundSyncService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(T3Notifications.contentIntent(this))
+            .addAction(0, "Stop", stopPendingIntent())
             .build()
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(
@@ -402,6 +418,7 @@ class BackgroundSyncService : Service() {
 
     companion object {
         private const val LOG_TAG = "T3BackgroundSync"
+        private const val ACTION_STOP = "com.t3codes.mobile.action.STOP_BACKGROUND_SYNC"
         private const val SERVICE_NOTIFICATION_ID = 7310
         private const val COMPLETION_NOTIFICATION_BASE = 7320
         private const val INPUT_NOTIFICATION_BASE = 7420

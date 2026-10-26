@@ -503,6 +503,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onAppForegrounded() {
+        val syncEnabled = prefs.getBoolean(AppPreferences.BACKGROUND_SYNC, false)
+        if (state.backgroundSyncEnabled != syncEnabled) {
+            state = state.copy(backgroundSyncEnabled = syncEnabled)
+        }
         startBackgroundSyncIfEnabled()
         if (!stoppedInBackground) return
         stoppedInBackground = false
