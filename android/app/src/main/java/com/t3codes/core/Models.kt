@@ -291,9 +291,33 @@ data class TurnItem(
     val inputIntent: String? = null,
     val messageId: String = "",
     val nativeItemRef: JsonElement? = null,
+    val requestId: String = "",
+    val questions: List<UserInputQuestion> = emptyList(),
+    val questionAnswer: JsonElement? = null,
+    val responseMode: String? = null,
     val startedAt: String = "",
     val completedAt: String = "",
     val updatedAt: String = "",
+)
+
+@Serializable
+data class UserInputQuestion(
+    val id: String = "",
+    val header: String = "",
+    val question: String = "",
+    val options: List<UserInputOption> = emptyList(),
+    val multiSelect: Boolean? = null,
+    val allowCustomAnswer: Boolean? = null,
+    val initialAnswer: String? = null,
+    val required: Boolean? = null,
+)
+
+@Serializable
+data class UserInputOption(
+    val label: String = "",
+    val description: String = "",
+    val value: String? = null,
+    val preview: String? = null,
 )
 
 @Serializable

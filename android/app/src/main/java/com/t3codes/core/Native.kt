@@ -71,6 +71,12 @@ internal object Native {
         answersJson: String,
     ): String
 
+    external fun nativeDismissUserInput(
+        handle: Long,
+        threadId: String,
+        requestId: String,
+    ): String
+
     external fun nativeThreadAction(
         handle: Long,
         threadId: String,

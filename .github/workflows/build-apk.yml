@@ -13,7 +13,7 @@ permissions:
 
 env:
   CORE_REPO: Shrawan-13/t3code-core
-  CORE_VERSION: v0.1.1
+  CORE_VERSION: v0.2.0
 
 concurrency:
   group: build-apk-${{ github.ref }}

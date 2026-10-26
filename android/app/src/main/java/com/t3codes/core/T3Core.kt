@@ -248,6 +248,10 @@ class T3Connection internal constructor(
         )
     }
 
+    fun dismissUserInput(threadId: String, requestId: String) {
+        T3Core.ensureOk(Native.nativeDismissUserInput(handle, threadId, requestId))
+    }
+
     /**
      * Thread mutation shortcuts: archive, unarchive, delete, rename, pin,
      * unpin, markRead, markUnread, settle, unsettle, snooze, unsnooze,

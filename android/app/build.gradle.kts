@@ -19,8 +19,8 @@ android {
         applicationId = "com.t3codes.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 14
-        versionName = "0.2.12"
+        versionCode = 15
+        versionName = "0.3.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

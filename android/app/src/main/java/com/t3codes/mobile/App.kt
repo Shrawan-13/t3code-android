@@ -43,8 +43,14 @@ fun T3App(viewModel: MainViewModel) {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_START -> viewModel.onAppForegrounded()
-                Lifecycle.Event.ON_STOP -> viewModel.onAppBackgrounded()
+                Lifecycle.Event.ON_START -> {
+                    AppVisibility.foreground = true
+                    viewModel.onAppForegrounded()
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    AppVisibility.foreground = false
+                    viewModel.onAppBackgrounded()
+                }
                 else -> Unit
             }
         }

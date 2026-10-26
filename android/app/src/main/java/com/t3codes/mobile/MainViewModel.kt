@@ -99,6 +99,7 @@ data class ThreadUi(
     val committedSequence: Long = 0,
     val live: Boolean = false,
     val pendingUserItems: List<VisibleTurnItem> = emptyList(),
+    val inputBusyRequestId: String? = null,
 )
 
 data class UsageUi(
@@ -207,6 +208,7 @@ data class UiState(
     val themePref: ThemePref = ThemePref.System,
     val selfTestBusy: Boolean = false,
     val selfTestLog: List<String> = emptyList(),
+    val backgroundSyncEnabled: Boolean = false,
 ) {
     val connected: Boolean get() = config != null
 
@@ -248,6 +250,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val lastThreadCacheAt = mutableMapOf<String, Long>()
     private var cachedEnvironmentId: String? = null
     private var stoppedInBackground = false
+    private var pendingNotificationThreadId: String? = null
 
     var state by mutableStateOf(
         UiState(
@@ -256,6 +259,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             themePref = runCatching {
                 ThemePref.valueOf(prefs.getString(KEY_THEME, ThemePref.System.name) ?: ThemePref.System.name)
             }.getOrDefault(ThemePref.System),
+            backgroundSyncEnabled = prefs.getBoolean(AppPreferences.BACKGROUND_SYNC, false),
         ),
     )
         private set
@@ -402,10 +406,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // A reconnect gets a fresh native connection. Restart the open
                 // thread so its feed and projection use the new handle.
-                if (activeThreadId != null && state.activeThreadId == activeThreadId) {
+                val pendingThread = pendingNotificationThreadId
+                if (pendingThread != null) {
+                    pendingNotificationThreadId = null
+                    openThread(pendingThread)
+                } else if (activeThreadId != null && state.activeThreadId == activeThreadId) {
                     state = state.copy(activeThreadId = null, thread = null)
                     openThread(activeThreadId)
                 }
+                startBackgroundSyncIfEnabled()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
@@ -456,7 +465,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         stoppedInBackground = true
     }
 
+    fun setBackgroundSync(enabled: Boolean) {
+        prefs.edit().putBoolean(AppPreferences.BACKGROUND_SYNC, enabled).apply()
+        state = state.copy(backgroundSyncEnabled = enabled)
+        val application = getApplication<Application>()
+        if (enabled) {
+            if (state.token.isBlank()) {
+                toast("Connect to T3 Code first.")
+                return
+            }
+            runCatching { BackgroundSyncService.start(application) }
+                .onFailure { toast("Could not start background sync: ${it.message}") }
+        } else {
+            BackgroundSyncService.stop(application)
+        }
+    }
+
+    fun startBackgroundSyncIfEnabled() {
+        if (!state.backgroundSyncEnabled || state.token.isBlank()) return
+        runCatching { BackgroundSyncService.start(getApplication<Application>()) }
+    }
+
+    fun openThreadFromNotification(threadId: String) {
+        if (threadId.isBlank()) return
+        if (state.config != null && connection != null) {
+            openThread(threadId)
+            return
+        }
+        pendingNotificationThreadId = threadId
+        if (state.connecting) return
+        if (state.token.isBlank()) {
+            pendingNotificationThreadId = null
+            toast("Connect to T3 Code to open this chat.")
+            return
+        }
+        connect()
+    }
+
     fun onAppForegrounded() {
+        startBackgroundSyncIfEnabled()
         if (!stoppedInBackground) return
         stoppedInBackground = false
         if (state.connecting) return
@@ -544,6 +591,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val token = withContext(Dispatchers.IO) { T3Core.pair(base, link).accessToken }
                 prefs.edit().putString(KEY_BASE, base).putString(KEY_TOKEN, token).putBoolean(KEY_AUTO, true).apply()
+                if (state.backgroundSyncEnabled) BackgroundSyncService.stop(getApplication<Application>())
                 state = state.copy(connecting = false, token = token, pairingLink = "", error = null)
                 connect()
             } catch (error: Throwable) {
@@ -553,12 +601,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnect() {
-        prefs.edit().putBoolean(KEY_AUTO, false).apply()
+        prefs.edit()
+            .putBoolean(KEY_AUTO, false)
+            .putBoolean(AppPreferences.BACKGROUND_SYNC, false)
+            .apply()
+        BackgroundSyncService.stop(getApplication<Application>())
         reconnectJob?.cancel()
         reconnectJob = null
         reconnectAttempts = 0
         lastProviderRefreshAt = 0L
         stoppedInBackground = false
+        pendingNotificationThreadId = null
         modelsJob?.cancel()
         modelsJob = null
         viewModelScope.launch {
@@ -588,6 +641,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 connectionNote = null,
                 modelsRefreshing = false,
                 error = null,
+                backgroundSyncEnabled = false,
             )
         }
     }
@@ -1725,6 +1779,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 toast(if (decision == "decline") "Declined" else "Approved")
             } catch (error: Throwable) {
                 toast(describe(error))
+            }
+        }
+    }
+
+    fun respondUserInput(requestId: String, answers: JsonObject) {
+        val current = state.thread ?: return
+        if (current.inputBusyRequestId != null) return
+        val request = current.projection.pendingRequests.firstOrNull { it.id == requestId } ?: return
+        if (request.kind != "user_input") return
+        val conn = connection ?: return
+        state = state.copy(thread = current.copy(inputBusyRequestId = requestId))
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    conn.respondToRequest(
+                        threadId = current.threadId,
+                        requestId = requestId,
+                        decision = "",
+                        answers = answers,
+                    )
+                }
+                toast("Answer sent")
+            } catch (error: Throwable) {
+                toast(describe(error))
+            } finally {
+                val latest = state.thread
+                if (latest?.threadId == current.threadId) {
+                    state = state.copy(thread = latest.copy(inputBusyRequestId = null))
+                }
+            }
+        }
+    }
+
+    fun dismissUserInput(requestId: String) {
+        val current = state.thread ?: return
+        if (current.inputBusyRequestId != null) return
+        val conn = connection ?: return
+        state = state.copy(thread = current.copy(inputBusyRequestId = requestId))
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    conn.dismissUserInput(current.threadId, requestId)
+                }
+                toast("Question dismissed")
+            } catch (error: Throwable) {
+                toast(describe(error))
+            } finally {
+                val latest = state.thread
+                if (latest?.threadId == current.threadId) {
+                    state = state.copy(thread = latest.copy(inputBusyRequestId = null))
+                }
             }
         }
     }

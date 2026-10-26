@@ -6,6 +6,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -99,13 +101,19 @@ import com.t3codes.core.RuntimeRequest
 import com.t3codes.core.ServerConfig
 import com.t3codes.core.T3Core
 import com.t3codes.core.ThreadShell
+import com.t3codes.core.ThreadProjection
+import com.t3codes.core.UserInputQuestion
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -363,6 +371,9 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                 onAttach = viewModel::attach,
                 onRemoveAttachment = viewModel::removeAttachment,
                 onRespond = viewModel::respond,
+                onRespondUserInput = viewModel::respondUserInput,
+                onDismissUserInput = viewModel::dismissUserInput,
+                inputBusyRequestId = thread.inputBusyRequestId,
                 onDismissError = viewModel::dismissThreadError,
             )
         },
@@ -767,6 +778,9 @@ private fun ComposerColumn(
     onAttach: (android.net.Uri) -> Unit,
     onRemoveAttachment: (com.t3codes.core.Attachment) -> Unit,
     onRespond: (String, String) -> Unit,
+    onRespondUserInput: (String, JsonObject) -> Unit,
+    onDismissUserInput: (String) -> Unit,
+    inputBusyRequestId: String?,
     onDismissError: () -> Unit,
 ) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -781,7 +795,17 @@ private fun ComposerColumn(
             .imePadding(),
     ) {
         thread.projection.pendingRequests.firstOrNull()?.let { request ->
-            ApprovalCard(request = request, onRespond = onRespond)
+            if (request.kind == "user_input") {
+                UserInputCard(
+                    request = request,
+                    questions = thread.projection.questionsFor(request.id),
+                    busy = inputBusyRequestId == request.id,
+                    onSubmit = { answers -> onRespondUserInput(request.id, answers) },
+                    onDismiss = { onDismissUserInput(request.id) },
+                )
+            } else {
+                ApprovalCard(request = request, onRespond = onRespond)
+            }
         }
         AnimatedVisibility(visible = thread.error != null) {
             thread.error?.let {
@@ -869,9 +893,275 @@ private fun approvalMessage(kind: String): String = when (kind) {
     "command" -> "The agent is waiting to run a command in your workspace."
     "file-read" -> "The agent wants to read a file outside its usual scope."
     "file-change" -> "The agent wants to modify a file in your workspace."
-    "user-input" -> "The agent asked a question. Answer it from the full T3 client for now."
     "mcp-elicitation" -> "An MCP server is requesting input."
     else -> "The agent is waiting for your decision before it continues."
+}
+
+private data class UserInputDraft(
+    val selected: Set<String> = emptySet(),
+    val custom: String = "",
+)
+
+@Composable
+private fun UserInputCard(
+    request: RuntimeRequest,
+    questions: List<UserInputQuestion>,
+    busy: Boolean,
+    onSubmit: (JsonObject) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var drafts by remember(request.id) { mutableStateOf<Map<String, UserInputDraft>>(emptyMap()) }
+
+    LaunchedEffect(request.id, questions) {
+        val missing = questions.filter { it.id.isNotBlank() && !drafts.containsKey(it.id) }
+        if (missing.isNotEmpty()) {
+            drafts = drafts + missing.associate { question ->
+                val initial = question.initialAnswer.orEmpty()
+                val matchingOption = question.options.firstOrNull { option ->
+                    option.value == initial || option.label == initial
+                }
+                question.id to UserInputDraft(
+                    selected = matchingOption?.let {
+                        setOf(it.value ?: it.label)
+                    }.orEmpty(),
+                    custom = if (matchingOption == null && initial.isNotBlank()) initial else "",
+                )
+            }
+        }
+    }
+
+    val blockedReason = request.responseCapability?.let { capability ->
+        val obj = capability as? JsonObject
+        if ((obj?.get("type") as? JsonPrimitive)?.contentOrNull == "not_resumable") {
+            (obj?.get("reason") as? JsonPrimitive)?.contentOrNull
+                ?.takeIf { it.isNotBlank() }
+                ?: "This question can no longer be answered."
+        } else {
+            null
+        }
+    }
+    val complete = questions.isNotEmpty() && questions.all { question ->
+        val draft = drafts[question.id] ?: UserInputDraft()
+        draft.selected.isNotEmpty() || draft.custom.trim().isNotEmpty()
+    }
+    val canSubmit = complete && !busy && blockedReason == null
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    ) {
+        Column(
+            modifier = Modifier
+                .heightIn(max = 380.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(15.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Rounded.Edit,
+                    contentDescription = null,
+                    modifier = Modifier.size(19.dp),
+                )
+                Spacer(Modifier.width(9.dp))
+                Text(
+                    text = if (questions.size > 1) "Input needed" else "Question from the agent",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (busy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(17.dp),
+                        strokeWidth = 2.dp,
+                    )
+                }
+            }
+            if (questions.isEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "The agent is waiting for your answer. The question is still loading.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            questions.forEachIndexed { index, question ->
+                Spacer(Modifier.height(if (index == 0) 12.dp else 18.dp))
+                if (question.header.isNotBlank()) {
+                    Text(
+                        text = question.header,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.height(3.dp))
+                }
+                Text(
+                    text = question.question,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (question.options.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = if (question.multiSelect == true) "Choose any that apply" else "Choose one",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    question.options.forEach { option ->
+                        val value = option.value ?: option.label
+                        val selected = drafts[question.id]?.selected?.contains(value) == true
+                        Surface(
+                            onClick = {
+                                if (!busy) {
+                                    val current = drafts[question.id] ?: UserInputDraft()
+                                    val nextSelected = when {
+                                        question.multiSelect == true && selected ->
+                                            current.selected - value
+                                        question.multiSelect == true ->
+                                            current.selected + value
+                                        else -> setOf(value)
+                                    }
+                                    drafts = drafts + (
+                                        question.id to current.copy(
+                                            selected = nextSelected,
+                                            custom = if (selected && question.multiSelect == true) {
+                                                current.custom
+                                            } else {
+                                                ""
+                                            },
+                                        )
+                                    )
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 3.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                            } else {
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
+                            },
+                            border = BorderStroke(
+                                1.dp,
+                                if (selected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.outlineVariant
+                                },
+                            ),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                Icon(
+                                    imageVector = if (selected) {
+                                        Icons.Rounded.Check
+                                    } else {
+                                        Icons.Rounded.Add
+                                    },
+                                    contentDescription = null,
+                                    modifier = Modifier.size(17.dp),
+                                    tint = if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Column {
+                                    Text(option.label, style = MaterialTheme.typography.bodyMedium)
+                                    if (option.description.isNotBlank()) {
+                                        Spacer(Modifier.height(2.dp))
+                                        Text(
+                                            text = option.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (question.allowCustomAnswer != false) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = drafts[question.id]?.custom.orEmpty(),
+                        onValueChange = { value ->
+                            if (!busy) {
+                                val current = drafts[question.id] ?: UserInputDraft()
+                                drafts = drafts + (
+                                    question.id to current.copy(
+                                        selected = if (value.isBlank()) current.selected else emptySet(),
+                                        custom = value,
+                                    )
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Type a different answer…") },
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        minLines = 1,
+                        maxLines = 3,
+                        enabled = !busy && blockedReason == null,
+                    )
+                }
+            }
+            blockedReason?.let {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onDismiss, enabled = !busy) {
+                    Text("Dismiss", color = MaterialTheme.colorScheme.onSecondaryContainer)
+                }
+                Spacer(Modifier.width(4.dp))
+                Button(
+                    onClick = { onSubmit(buildUserInputAnswers(questions, drafts)) },
+                    enabled = canSubmit,
+                ) {
+                    Text(if (busy) "Sending…" else "Send answer")
+                }
+            }
+        }
+    }
+}
+
+private fun ThreadProjection.questionsFor(requestId: String): List<UserInputQuestion> {
+    val items = visibleTurnItems.map { it.item } + turnItems
+    return items.lastOrNull {
+        it.type == "user_input_request" && it.requestId == requestId
+    }?.questions.orEmpty()
+}
+
+private fun buildUserInputAnswers(
+    questions: List<UserInputQuestion>,
+    drafts: Map<String, UserInputDraft>,
+): JsonObject = buildJsonObject {
+    questions.forEach { question ->
+        val draft = drafts[question.id] ?: UserInputDraft()
+        val custom = draft.custom.trim()
+        when {
+            custom.isNotEmpty() -> put(question.id, JsonPrimitive(custom))
+            draft.selected.isNotEmpty() && question.multiSelect == true -> put(
+                question.id,
+                buildJsonArray { draft.selected.forEach { add(JsonPrimitive(it)) } },
+            )
+            draft.selected.isNotEmpty() -> put(question.id, JsonPrimitive(draft.selected.first()))
+        }
+    }
 }
 
 @Composable

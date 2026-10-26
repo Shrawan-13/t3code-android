@@ -1,5 +1,10 @@
 package com.t3codes.mobile
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +31,7 @@ import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Logout
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
@@ -38,6 +44,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -53,6 +60,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.t3codes.core.Provider
 
 @Composable
@@ -63,6 +71,33 @@ fun SettingsScreen(state: UiState, viewModel: MainViewModel) {
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
     val latestCrash = remember { CrashReporter.latest(context) }
+    var enableAfterPermission by remember { mutableStateOf(false) }
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted && enableAfterPermission) {
+            viewModel.setBackgroundSync(true)
+        } else if (!granted) {
+            viewModel.showMessage("Allow notifications to use background sync.")
+        }
+        enableAfterPermission = false
+    }
+    val toggleBackgroundSync: (Boolean) -> Unit = { enabled ->
+        if (!enabled) {
+            viewModel.setBackgroundSync(false)
+        } else if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            enableAfterPermission = true
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            viewModel.setBackgroundSync(true)
+        }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -181,6 +216,27 @@ fun SettingsScreen(state: UiState, viewModel: MainViewModel) {
                         Text("Disconnect")
                     }
                 }
+            }
+        }
+
+        item { SectionLabel("Notifications") }
+        item {
+            GroupedCard {
+                SettingsRow(
+                    icon = Icons.Rounded.Notifications,
+                    title = "Background sync",
+                    subtitle = if (state.backgroundSyncEnabled) {
+                        "Watching active chats and sending completion or input alerts."
+                    } else {
+                        "Keep active chats updated and notify you when they finish or need input."
+                    },
+                    trailing = {
+                        Switch(
+                            checked = state.backgroundSyncEnabled,
+                            onCheckedChange = toggleBackgroundSync,
+                        )
+                    },
+                )
             }
         }
 
