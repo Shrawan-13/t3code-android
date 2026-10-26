@@ -337,30 +337,34 @@ class ClientCache(context: Context) {
 
                 val kinds = rows.mapTo(mutableSetOf()) { it.kind }
                 val incoming = rows.associateBy { it.kind to it.id }
-                val existingPayloads: Map<Pair<String, String>, String> = if (kinds.isEmpty()) {
-                    emptyMap()
-                } else {
-                    val placeholders = kinds.joinToString(",") { "?" }
-                    db.rawQuery(
-                        "SELECT kind, item_id, payload_hash FROM thread_items " +
-                            "WHERE base_url = ? AND environment_id = ? AND thread_id = ? " +
-                            "AND kind IN ($placeholders)",
-                        arrayOf(base, environmentId, threadId) + kinds.toTypedArray(),
-                    ).use { cursor ->
-                        buildMap {
-                            while (cursor.moveToNext()) {
-                                put(
-                                    cursor.getString(0) to cursor.getString(1),
-                                    cursor.getString(2),
-                                )
+                val existingPayloads: Map<Pair<String, String>, ItemState> =
+                    if (kinds.isEmpty()) {
+                        emptyMap()
+                    } else {
+                        val placeholders = kinds.joinToString(",") { "?" }
+                        db.rawQuery(
+                            "SELECT kind, item_id, payload_hash, ordinal FROM thread_items " +
+                                "WHERE base_url = ? AND environment_id = ? AND thread_id = ? " +
+                                "AND kind IN ($placeholders)",
+                            arrayOf(base, environmentId, threadId) + kinds.toTypedArray(),
+                        ).use { cursor ->
+                            buildMap {
+                                while (cursor.moveToNext()) {
+                                    put(
+                                        cursor.getString(0) to cursor.getString(1),
+                                        ItemState(cursor.getString(2), cursor.getInt(3)),
+                                    )
+                                }
                             }
                         }
                     }
-                }
 
                 var changed = false
                 rows.forEach { item ->
-                    if (existingPayloads[item.kind to item.id] == item.hash) return@forEach
+                    val stored = existingPayloads[item.kind to item.id]
+                    if (stored != null && stored.hash == item.hash && stored.ordinal == item.ordinal) {
+                        return@forEach
+                    }
                     db.insertWithOnConflict(
                         "thread_items",
                         null,
@@ -627,6 +631,8 @@ class ClientCache(context: Context) {
     ) {
         val hash: String = "${payload.length}:${payload.hashCode()}"
     }
+
+    private data class ItemState(val hash: String, val ordinal: Int)
 
     private inline fun <reified T> MutableList<ItemRow>.addItem(
         kind: String,
