@@ -20,7 +20,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.encodeToJsonElement
-import kotlinx.serialization.json.parseToJsonElement
 import java.io.File
 
 /**
@@ -293,7 +292,7 @@ class ClientCache(context: Context) {
                         addItem("provider_turn", item.id(), index, item.updatedAt(), item)
                     }
                     snapshot.projection.runtimeRequests.forEachIndexed { index, item ->
-                        addItem("runtime_request", item.id.ifBlank { "request:$index" }, index, item.updatedAt, item)
+                        addItem("runtime_request", item.id.ifBlank { "request:$index" }, index, item.createdAt, item)
                     }
                     snapshot.projection.messages.forEachIndexed { index, item ->
                         addItem("message", item.id.ifBlank { "message:$index" }, index, item.updatedAt, item)
@@ -541,7 +540,7 @@ class ClientCache(context: Context) {
             "DELETE FROM thread_items WHERE rowid IN (" +
                 "SELECT rowid FROM thread_items WHERE base_url = ? AND environment_id = ? " +
                 "AND thread_id = ? AND kind = 'older' ORDER BY ordinal DESC LIMIT ?)",
-            arrayOf(base, environmentId, threadId, overflow),
+            arrayOf(base, environmentId, threadId, overflow.toString()),
         )
     }
 
@@ -549,7 +548,7 @@ class ClientCache(context: Context) {
         val stale = db.rawQuery(
             "SELECT thread_id FROM threads WHERE base_url = ? AND environment_id = ? " +
                 "ORDER BY updated_at DESC LIMIT -1 OFFSET ?",
-            arrayOf(base, environmentId, MAX_THREADS),
+            arrayOf(base, environmentId, MAX_THREADS.toString()),
         ).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) add(cursor.getString(0))
@@ -573,7 +572,7 @@ class ClientCache(context: Context) {
         val stale = db.rawQuery(
             "SELECT base_url, environment_id FROM environments " +
                 "ORDER BY updated_at DESC LIMIT -1 OFFSET ?",
-            arrayOf(MAX_ENVIRONMENTS),
+            arrayOf(MAX_ENVIRONMENTS.toString()),
         ).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) add(cursor.getString(0) to cursor.getString(1))
