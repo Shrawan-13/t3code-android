@@ -84,7 +84,7 @@ fun AddProjectScreen(state: UiState, viewModel: MainViewModel) {
     var discoveryError by remember { mutableStateOf<String?>(null) }
 
     var newName by rememberSaveable { mutableStateOf("") }
-    var publishRepository by rememberSaveable { mutableStateOf(true) }
+    var publishRepository by rememberSaveable { mutableStateOf(false) }
     var publishProvider by rememberSaveable { mutableStateOf("") }
 
     var localPath by rememberSaveable { mutableStateOf(directoryPath(addProjectBaseDirectory(state.config))) }
@@ -622,7 +622,7 @@ fun AddProjectScreen(state: UiState, viewModel: MainViewModel) {
                     item {
                         Button(
                             onClick = {
-                                val url = cloneRemoteUrl.trim()
+                                val url = normalizeCloneUrl(cloneRemoteUrl)
                                 if (url.isBlank()) {
                                     error = "Enter a repository URL."
                                     return@Button
@@ -1169,6 +1169,15 @@ private fun newProjectFolderName(name: String): String {
     val reserved = setOf("con", "prn", "aux", "nul") +
         (1..9).map { "com$it" } + (1..9).map { "lpt$it" }
     return if (slug in reserved) "$slug-project" else slug
+}
+
+private fun normalizeCloneUrl(value: String): String {
+    val trimmed = value.trim()
+    if (trimmed.isEmpty()) return trimmed
+    val shorthand = Regex("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]+(?:\\.git)?$")
+    if (!shorthand.matches(trimmed)) return trimmed
+    val repository = if (trimmed.endsWith(".git")) trimmed else "$trimmed.git"
+    return "https://github.com/$repository"
 }
 
 private fun cloneTitleFromUrl(value: String): String {
