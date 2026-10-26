@@ -14,6 +14,7 @@ import com.t3codes.core.ThreadProjection
 import com.t3codes.core.ThreadShell
 import com.t3codes.core.TurnItem
 import com.t3codes.core.VisibleTurnItem
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -21,6 +22,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.encodeToJsonElement
 import java.io.File
+import java.security.MessageDigest
 
 /**
  * Canonical on-device history store.
@@ -51,28 +53,16 @@ class ClientCache(context: Context) {
     private val appContext = context.applicationContext
     private val database = CacheDatabase(appContext)
 
-    @Volatile
-    private var legacyStoreRemoved = false
+    private val legacyRoot = File(appContext.filesDir, "client-cache")
 
     init {
         runCatching { database.setWriteAheadLoggingEnabled(true) }
     }
 
-    /**
-     * The previous implementation wrote one JSON file per snapshot. It is
-     * superseded by the database and would otherwise sit on disk forever.
-     * Callers reach this from a background dispatcher, never the main thread.
-     */
-    private fun removeLegacyStore() {
-        if (legacyStoreRemoved) return
-        legacyStoreRemoved = true
-        runCatching { File(appContext.filesDir, "client-cache").deleteRecursively() }
-    }
-
     /** Finds the newest cached environment for a base URL without knowing its id yet. */
     fun loadSession(baseUrl: String): RestoredSession? = runCatching {
-        removeLegacyStore()
         val base = normalize(baseUrl)
+        importLegacySession(base)
         val environmentId = database.readableDatabase.rawQuery(
             "SELECT environment_id FROM environments WHERE base_url = ? " +
                 "ORDER BY updated_at DESC LIMIT 1",
@@ -87,6 +77,100 @@ class ClientCache(context: Context) {
             shell = loadShell(base, environmentId),
         )
     }.getOrNull()
+
+    /**
+     * Version 0.2.11 kept one JSON file per snapshot. Import the shell eagerly
+     * so the first launch after upgrading is not blank, and import each thread
+     * lazily the first time it is opened. Thread files are removed only after
+     * their contents are readable from the database.
+     */
+    @Serializable
+    private data class LegacyConfig(
+        val baseUrl: String = "",
+        val environmentId: String = "",
+        val config: ServerConfig = ServerConfig(),
+    )
+
+    @Serializable
+    private data class LegacyShell(
+        val baseUrl: String = "",
+        val environmentId: String = "",
+        val snapshot: ShellSnapshot = ShellSnapshot(),
+    )
+
+    @Serializable
+    private data class LegacyThread(
+        val baseUrl: String = "",
+        val environmentId: String = "",
+        val threadId: String = "",
+        val snapshot: ThreadDetailSnapshot = ThreadDetailSnapshot(),
+    )
+
+    private fun importLegacySession(base: String) {
+        val directories = legacyRoot.listFiles() ?: return
+        val newest = directories.mapNotNull { directory ->
+            val file = File(directory, "config.json")
+            if (!file.isFile) return@mapNotNull null
+            val stored = decodeJson<LegacyConfig>(file.readText()) ?: return@mapNotNull null
+            if (normalize(stored.baseUrl) != base || stored.environmentId.isBlank()) {
+                return@mapNotNull null
+            }
+            LegacySessionFile(stored, directory, file.lastModified())
+        }.maxByOrNull { it.modifiedAt } ?: return
+
+        val stored = newest.config
+        saveConfig(base, stored.environmentId, stored.config)
+        val shellFile = File(newest.directory, "shell.json")
+        if (shellFile.isFile) {
+            val shell = decodeJson<LegacyShell>(shellFile.readText())
+            if (shell != null &&
+                normalize(shell.baseUrl) == base &&
+                shell.environmentId == stored.environmentId
+            ) {
+                saveShell(base, stored.environmentId, shell.snapshot)
+                if (loadShell(base, stored.environmentId) != null) {
+                    runCatching { shellFile.delete() }
+                }
+            }
+        }
+        if (loadConfig(base, stored.environmentId) != null) {
+            runCatching { File(newest.directory, "config.json").delete() }
+        }
+    }
+
+    private fun importLegacyThread(
+        base: String,
+        environmentId: String,
+        threadId: String,
+    ): Boolean {
+        if (!legacyRoot.isDirectory) return false
+        val directory = legacyEnvironmentDir(base, environmentId)
+        val file = File(directory, "thread-${digest(threadId).take(24)}.json")
+        if (!file.isFile) return false
+        val stored = decodeJson<LegacyThread>(file.readText()) ?: return false
+        if (normalize(stored.baseUrl) != base ||
+            stored.environmentId != environmentId ||
+            stored.threadId != threadId ||
+            stored.snapshot.projection.thread.id != threadId
+        ) {
+            return false
+        }
+        saveThread(base, environmentId, threadId, stored.snapshot)
+        val imported = readThreadFromDb(base, environmentId, threadId) != null
+        if (imported) {
+            runCatching { file.delete() }
+            runCatching {
+                if (directory.listFiles().orEmpty().isEmpty()) directory.delete()
+            }
+        }
+        return imported
+    }
+
+    private data class LegacySessionFile(
+        val config: LegacyConfig,
+        val directory: File,
+        val modifiedAt: Long,
+    )
 
     fun loadConfig(baseUrl: String, environmentId: String): ServerConfig? = runCatching {
         database.readableDatabase.rawQuery(
@@ -104,7 +188,6 @@ class ClientCache(context: Context) {
 
     fun saveConfig(baseUrl: String, environmentId: String, config: ServerConfig) {
         if (environmentId.isBlank()) return
-        removeLegacyStore()
         runCatching {
             val db = database.writableDatabase
             val now = System.currentTimeMillis()
@@ -196,8 +279,22 @@ class ClientCache(context: Context) {
         environmentId: String,
         threadId: String,
     ): CachedThread? = runCatching {
-        val db = database.readableDatabase
         val base = normalize(baseUrl)
+        readThreadFromDb(base, environmentId, threadId) ?: run {
+            if (importLegacyThread(base, environmentId, threadId)) {
+                readThreadFromDb(base, environmentId, threadId)
+            } else {
+                null
+            }
+        }
+    }.getOrNull()
+
+    private fun readThreadFromDb(
+        base: String,
+        environmentId: String,
+        threadId: String,
+    ): CachedThread? = runCatching {
+        val db = database.readableDatabase
         val row = db.rawQuery(
             "SELECT snapshot_sequence, history_cursor, has_more_history, " +
                 "latest_local_turn_ordinal, projection_updated_at FROM threads " +
@@ -620,6 +717,14 @@ class ClientCache(context: Context) {
     }
 
     private fun normalize(baseUrl: String): String = baseUrl.trim().trimEnd('/')
+
+    private fun legacyEnvironmentDir(base: String, environmentId: String): File =
+        File(legacyRoot, digest("$base|$environmentId").take(20))
+
+    private fun digest(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray())
+            .joinToString("") { "%02x".format(it) }
 
     private inline fun <reified T> decodeJson(payload: String): T? =
         runCatching { T3Core.json.decodeFromString<T>(payload) }.getOrNull()
