@@ -1,22 +1,28 @@
 package com.t3codes.mobile
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddLink
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -156,7 +162,8 @@ fun AddProjectScreen(state: UiState, viewModel: MainViewModel) {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .imePadding(),
+            .background(MaterialTheme.colorScheme.background)
+            .windowInsetsPadding(WindowInsets.safeDrawing),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 48.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -980,12 +987,11 @@ private fun FolderBrowser(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                val current = result?.parentPath ?: target
+                val parent = parentDirectory(current)
                 TextButton(
-                    onClick = {
-                        val current = result?.parentPath ?: target
-                        val parent = parentDirectory(current)
-                        if (parent != current) onSelect(parent)
-                    },
+                    onClick = { onSelect(parent) },
+                    enabled = parent != current,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                 ) {
                     Icon(
@@ -1023,19 +1029,25 @@ private fun FolderBrowser(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                else -> result?.entries.orEmpty().forEach { entry ->
-                    BrowserRow(
-                        entry = entry,
-                        onClick = {
-                            onSelect(
-                                if (pinnedName.isBlank()) {
-                                    directoryPath(entry.fullPath)
-                                } else {
-                                    joinPath(entry.fullPath, pinnedName)
-                                },
-                            )
-                        },
-                    )
+                else -> Column(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    result?.entries.orEmpty().forEach { entry ->
+                        BrowserRow(
+                            entry = entry,
+                            onClick = {
+                                onSelect(
+                                    if (pinnedName.isBlank()) {
+                                        directoryPath(entry.fullPath)
+                                    } else {
+                                        joinPath(entry.fullPath, pinnedName)
+                                    },
+                                )
+                            },
+                        )
+                    }
                 }
             }
         }
