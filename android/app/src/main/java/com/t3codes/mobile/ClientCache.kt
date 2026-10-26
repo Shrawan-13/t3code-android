@@ -62,7 +62,7 @@ class ClientCache(context: Context) {
     /** Finds the newest cached environment for a base URL without knowing its id yet. */
     fun loadSession(baseUrl: String): RestoredSession? = runCatching {
         val base = normalize(baseUrl)
-        importLegacySession(base)
+        runCatching { importLegacySession(base) }
         val environmentId = database.readableDatabase.rawQuery(
             "SELECT environment_id FROM environments WHERE base_url = ? " +
                 "ORDER BY updated_at DESC LIMIT 1",
