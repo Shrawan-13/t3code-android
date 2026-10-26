@@ -482,133 +482,6 @@ fun WorkingRow(label: String = "Working…") {
 
 // --------------------------------------------------------------------- markdown
 
-private sealed interface MarkdownBlock {
-    data class Paragraph(val text: String) : MarkdownBlock
-    data class Heading(val text: String, val level: Int) : MarkdownBlock
-    data class Bullets(val items: List<String>) : MarkdownBlock
-    data class Code(val text: String, val language: String) : MarkdownBlock
-}
-
-private val bulletPattern = Regex("^\\d+\\. ")
-
-private fun parseMarkdown(source: String): List<MarkdownBlock> {
-    val lines = source.replace("\r\n", "\n").split('\n')
-    val blocks = mutableListOf<MarkdownBlock>()
-    var index = 0
-    while (index < lines.size) {
-        val line = lines[index]
-        val trimmed = line.trimStart()
-        when {
-            line.isBlank() -> index++
-            trimmed.startsWith("```") -> {
-                val language = trimmed.removePrefix("```").trim()
-                index++
-                val code = StringBuilder()
-                while (index < lines.size && !lines[index].trimStart().startsWith("```")) {
-                    code.appendLine(lines[index])
-                    index++
-                }
-                if (index < lines.size) index++
-                blocks += MarkdownBlock.Code(code.toString().trimEnd(), language)
-            }
-            trimmed.startsWith("#") -> {
-                val level = line.takeWhile { it == '#' }.length.coerceAtMost(6)
-                blocks += MarkdownBlock.Heading(line.drop(level).trim(), level)
-                index++
-            }
-            trimmed.startsWith("- ") || trimmed.startsWith("* ") || bulletPattern.containsMatchIn(trimmed) -> {
-                val items = mutableListOf<String>()
-                while (index < lines.size) {
-                    val candidate = lines[index].trimStart()
-                    when {
-                        candidate.startsWith("- ") -> {
-                            items += candidate.drop(2)
-                            index++
-                        }
-                        candidate.startsWith("* ") -> {
-                            items += candidate.drop(2)
-                            index++
-                        }
-                        bulletPattern.containsMatchIn(candidate) -> {
-                            items += candidate.substringAfter(". ")
-                            index++
-                        }
-                        else -> break
-                    }
-                }
-                blocks += MarkdownBlock.Bullets(items)
-            }
-            else -> {
-                val paragraph = mutableListOf<String>()
-                while (index < lines.size) {
-                    val candidate = lines[index]
-                    val candidateTrimmed = candidate.trimStart()
-                    if (candidate.isBlank() ||
-                        candidateTrimmed.startsWith("```") ||
-                        candidateTrimmed.startsWith("#") ||
-                        candidateTrimmed.startsWith("- ") ||
-                        candidateTrimmed.startsWith("* ") ||
-                        bulletPattern.containsMatchIn(candidateTrimmed)
-                    ) {
-                        break
-                    }
-                    paragraph += candidate
-                    index++
-                }
-                if (paragraph.isNotEmpty()) blocks += MarkdownBlock.Paragraph(paragraph.joinToString("\n"))
-            }
-        }
-    }
-    return blocks
-}
-
-private val inlinePattern = Regex(
-    "\\*\\*([^*]+)\\*\\*|`([^`]+)`|\\*([^*]+)\\*|\\[([^\\]]+)]\\(([^)]+)\\)",
-)
-
-@Composable
-private fun inlineMarkdown(text: String): AnnotatedString {
-    val linkColor = MaterialTheme.colorScheme.primary
-    val codeColor = MaterialTheme.colorScheme.surfaceContainerHighest
-    return remember(text, linkColor, codeColor) {
-        buildAnnotatedString {
-            var last = 0
-            inlinePattern.findAll(text).forEach { match ->
-                append(text.substring(last, match.range.first))
-                val start = length
-                when {
-                    match.groups[1] != null -> {
-                        append(match.groupValues[1])
-                        addStyle(SpanStyle(fontWeight = FontWeight.SemiBold), start, length)
-                    }
-                    match.groups[2] != null -> {
-                        append(match.groupValues[2])
-                        addStyle(
-                            SpanStyle(fontFamily = FontFamily.Monospace, background = codeColor),
-                            start,
-                            length,
-                        )
-                    }
-                    match.groups[3] != null -> {
-                        append(match.groupValues[3])
-                        addStyle(SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic), start, length)
-                    }
-                    match.groups[4] != null -> {
-                        append(match.groupValues[4])
-                        addStyle(
-                            SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline),
-                            start,
-                            length,
-                        )
-                    }
-                }
-                last = match.range.last + 1
-            }
-            append(text.substring(last))
-        }
-    }
-}
-
 @Composable
 fun MarkdownText(
     text: String,
@@ -616,66 +489,12 @@ fun MarkdownText(
     style: TextStyle = MaterialTheme.typography.bodyLarge,
     color: Color = MaterialTheme.colorScheme.onSurface,
 ) {
-    val blocks = remember(text) { parseMarkdown(text) }
-    Column(
+    RichMarkdownText(
+        text = text,
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        blocks.forEach { block ->
-            when (block) {
-                is MarkdownBlock.Paragraph -> SelectionContainer {
-                    Text(
-                        text = inlineMarkdown(block.text),
-                        style = style,
-                        color = color,
-                    )
-                }
-                is MarkdownBlock.Heading -> Text(
-                    text = inlineMarkdown(block.text),
-                    style = when (block.level) {
-                        1 -> MaterialTheme.typography.headlineSmall
-                        2 -> MaterialTheme.typography.titleLarge
-                        else -> MaterialTheme.typography.titleMedium
-                    },
-                    color = color,
-                )
-                is MarkdownBlock.Bullets -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    block.items.forEach { item ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("•", style = style, color = MaterialTheme.colorScheme.primary)
-                            Text(inlineMarkdown(item), style = style, color = color)
-                        }
-                    }
-                }
-                is MarkdownBlock.Code -> Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(12.dp),
-                    ) {
-                        if (block.language.isNotBlank()) {
-                            Text(
-                                text = block.language.uppercase(Locale.getDefault()),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(5.dp))
-                        }
-                        Text(
-                            text = block.text,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = color,
-                        )
-                    }
-                }
-            }
-        }
-    }
+        style = style,
+        color = color,
+    )
 }
 
 // ------------------------------------------------------------------ timeline rows
@@ -711,12 +530,10 @@ fun ThinkingCard(entry: TimelineEntry) {
                 )
             }
             Spacer(Modifier.height(5.dp))
-            Text(
+            RichMarkdownText(
                 text = entry.text,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = if (expanded) Int.MAX_VALUE else 3,
-                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -1159,14 +976,12 @@ private fun WorkEntryDetails(entry: TimelineEntry) {
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.55f),
                 ) {
-                    SelectionContainer {
-                        Text(
-                            text = entry.text,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(11.dp),
-                        )
-                    }
+                    RichMarkdownText(
+                        text = entry.text,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(11.dp),
+                    )
                 }
             }
 

@@ -146,6 +146,122 @@ class T3Connection internal constructor(
 
     fun projects(): ProjectSnapshot = call("projects.list")
 
+    /**
+     * Registers an existing folder as a project. The server may create the
+     * directory if it is missing, matching the official add-project flow.
+     */
+    fun createProject(
+        workspaceRoot: String,
+        title: String = "",
+        createIfMissing: Boolean = true,
+    ): Project {
+        val root = workspaceRoot.trim()
+        val resolvedTitle = title.trim().ifBlank {
+            root.split('/', '\\').lastOrNull { it.isNotBlank() } ?: "Project"
+        }
+        return call(
+            "projects.mutate",
+            buildJsonObject {
+                put("type", "project.create")
+                put("commandId", UUID.randomUUID().toString())
+                put("projectId", UUID.randomUUID().toString())
+                put("title", resolvedTitle)
+                put("workspaceRoot", root)
+                put("createWorkspaceRootIfMissing", createIfMissing)
+            },
+        )
+    }
+
+    /** Creates a new folder and an empty Git repository under the server's new-project root. */
+    fun createNamedProject(name: String): ProjectCreateNewResult = call(
+        "projects.createNew",
+        buildJsonObject { put("name", name.trim()) },
+    )
+
+    fun browseFiles(path: String, cwd: String = ""): FilesystemBrowseResult = call(
+        "filesystem.browse",
+        buildJsonObject {
+            put("partialPath", path.ifBlank { "~/" })
+            if (cwd.isNotBlank()) put("cwd", cwd)
+        },
+    )
+
+    fun discoverSourceControl(): SourceControlDiscoveryResult =
+        call("server.discoverSourceControl")
+
+    fun lookupRepository(
+        provider: String,
+        repository: String,
+        cwd: String = "",
+    ): SourceControlRepositoryInfo = call(
+        "sourceControl.lookupRepository",
+        buildJsonObject {
+            put("provider", provider)
+            put("repository", repository.trim())
+            if (cwd.isNotBlank()) put("cwd", cwd)
+        },
+    )
+
+    fun cloneRepository(
+        remoteUrl: String = "",
+        destinationPath: String,
+        provider: String = "",
+        repository: String = "",
+    ): SourceControlCloneResult = call(
+        "sourceControl.cloneRepository",
+        buildJsonObject {
+            if (provider.isNotBlank()) put("provider", provider)
+            if (repository.isNotBlank()) put("repository", repository.trim())
+            if (remoteUrl.isNotBlank()) put("remoteUrl", remoteUrl.trim())
+            put("destinationPath", destinationPath.trim())
+        },
+    )
+
+    fun startProjectClone(
+        projectId: String,
+        title: String,
+        remoteUrl: String = "",
+        destinationPath: String,
+        provider: String = "",
+        repository: String = "",
+    ): ProjectCloneStartResult = call(
+        "projectClone.start",
+        buildJsonObject {
+            put("projectId", projectId)
+            put("title", title.trim())
+            put("createdAt", java.time.Instant.now().toString())
+            if (provider.isNotBlank()) put("provider", provider)
+            if (repository.isNotBlank()) put("repository", repository.trim())
+            if (remoteUrl.isNotBlank()) put("remoteUrl", remoteUrl.trim())
+            put("destinationPath", destinationPath.trim())
+        },
+    )
+
+    fun cancelProjectClone(projectId: String): ProjectCloneActionResult = call(
+        "projectClone.cancel",
+        buildJsonObject { put("projectId", projectId) },
+    )
+
+    fun retryProjectClone(projectId: String): ProjectCloneActionResult = call(
+        "projectClone.retry",
+        buildJsonObject { put("projectId", projectId) },
+    )
+
+    fun publishRepository(
+        cwd: String,
+        provider: String,
+        repository: String,
+        visibility: String = "private",
+    ): JsonElement = callRaw(
+        "sourceControl.publishRepository",
+        buildJsonObject {
+            put("cwd", cwd.trim())
+            put("provider", provider)
+            put("repository", repository.trim())
+            put("visibility", visibility)
+        },
+    )
+
     fun watchShell(): ShellFeed = ShellFeed(Native.nativeShellWatch(handle).handleOrThrow("subscribeShell"))
 
     fun thread(threadId: String): ThreadDetailSnapshot =

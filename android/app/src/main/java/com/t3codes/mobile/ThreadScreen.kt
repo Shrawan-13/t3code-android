@@ -33,7 +33,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.ArrowBack
@@ -671,13 +670,11 @@ private fun UserBubble(entry: TimelineEntry) {
                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             ) {
                 Column(modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp)) {
-                    SelectionContainer {
-                        Text(
-                            text = entry.text,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        )
-                    }
+                    RichMarkdownText(
+                        text = entry.text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
                     if (entry.attachmentCount > 0) {
                         Spacer(Modifier.height(6.dp))
                         Text(
@@ -999,9 +996,10 @@ private fun UserInputCard(
                     )
                     Spacer(Modifier.height(3.dp))
                 }
-                Text(
+                RichMarkdownText(
                     text = question.question,
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
                 if (question.options.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))

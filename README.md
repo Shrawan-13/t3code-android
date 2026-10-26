@@ -34,8 +34,15 @@ All releases:
 - Instant local updates for settle, archive, delete, pin, rename, and model
   changes, reconciled from the live shell afterwards
 - Pull-requests list with open/merged/closed filters and direct links to GitHub
-- Live thread timeline: Markdown, compact tool calls grouped into collapsible
-  work logs, reasoning, commands, file changes, approvals, interrupts, and PRs
+- Live thread timeline: full CommonMark/GFM Markdown (tables, task lists,
+  nested lists, links, images, HTML, quotes, and copyable code), compact tool
+  calls grouped into collapsible work logs, reasoning, commands, file changes,
+  approvals, interrupts, and PRs
+- Add-project flow: create a Git repository on the server, register an existing
+  local folder (with Git detection), or clone from a Git URL, GitHub, GitLab,
+  and other configured source-control providers with live clone progress
+- Background sync mode with completion/input notifications and a persistent
+  stop action
 - Composer with image/file attachments, send, queue while running, stop, and an
   in-composer model picker backed by provider/model catalog refresh
 - Per-thread run permissions (ask first, auto-accept edits, auto, full access)
@@ -50,7 +57,7 @@ Native libraries are **not** committed here. The app CI downloads the arm64
 library from a `t3code-core` release:
 
 ```text
-https://github.com/Shrawan-13/t3code-core/releases/download/v0.1.0/libt3core-arm64-v8a.so
+https://github.com/Shrawan-13/t3code-core/releases/download/v0.2.0/libt3core-arm64-v8a.so
 ```
 
 The core repository also publishes `armeabi-v7a` and `x86_64` builds. The debug
@@ -80,7 +87,7 @@ Locally, fetch the core first:
 ```bash
 mkdir -p android/app/src/main/jniLibs/arm64-v8a
 curl -fL -o android/app/src/main/jniLibs/arm64-v8a/libt3core.so \
-  https://github.com/Shrawan-13/t3code-core/releases/download/v0.1.0/libt3core-arm64-v8a.so
+  https://github.com/Shrawan-13/t3code-core/releases/download/v0.2.0/libt3core-arm64-v8a.so
 cd android && gradle :app:assembleDebug
 ```
 

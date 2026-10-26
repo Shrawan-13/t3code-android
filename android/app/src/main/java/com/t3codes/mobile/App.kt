@@ -105,6 +105,7 @@ fun T3App(viewModel: MainViewModel) {
     Box(modifier = Modifier.fillMaxSize()) {
         when {
             !state.connected -> ConnectScreen(state, viewModel)
+            state.addProjectOpen -> AddProjectScreen(state, viewModel)
             state.newThreadOpen -> NewThreadScreen(state, viewModel)
             state.pullRequestDetail != null -> PullRequestDetailScreen(state, viewModel)
             state.terminal != null -> TerminalScreen(state, viewModel)

@@ -14,11 +14,16 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.t3codes.core.Attachment
 import com.t3codes.core.DiffPreview
+import com.t3codes.core.FilesystemBrowseResult
 import com.t3codes.core.GitRef
 import com.t3codes.core.Model
 import com.t3codes.core.ModelSelection
 import com.t3codes.core.Project
+import com.t3codes.core.ProjectCloneSnapshot
+import com.t3codes.core.ProjectCloneStartResult
+import com.t3codes.core.ProjectCreateNewResult
 import com.t3codes.core.ProjectEntry
+import com.t3codes.core.RawStream
 import com.t3codes.core.PullRequestDetail
 import com.t3codes.core.PullRequestDiffResult
 import com.t3codes.core.PullRequestEntry
@@ -29,6 +34,9 @@ import com.t3codes.core.RuntimeRequest
 import com.t3codes.core.ServerConfig
 import com.t3codes.core.ShellFeed
 import com.t3codes.core.ShellSnapshot
+import com.t3codes.core.SourceControlCloneResult
+import com.t3codes.core.SourceControlDiscoveryResult
+import com.t3codes.core.SourceControlRepositoryInfo
 import com.t3codes.core.T3Connection
 import com.t3codes.core.T3Core
 import com.t3codes.core.T3Exception
@@ -39,6 +47,7 @@ import com.t3codes.core.ThreadProjection
 import com.t3codes.core.ThreadShell
 import com.t3codes.core.TurnItem
 import com.t3codes.core.UsageSummary
+import com.t3codes.core.VcsStatus
 import com.t3codes.core.VisibleTurnItem
 import com.t3codes.core.WorkspaceStrategy
 import kotlinx.coroutines.CancellationException
@@ -194,6 +203,8 @@ data class UiState(
     val pullRequestDetail: PullRequestDetailUi? = null,
     val activeThreadId: String? = null,
     val thread: ThreadUi? = null,
+    val addProjectOpen: Boolean = false,
+    val projectClones: List<ProjectCloneSnapshot> = emptyList(),
     val newThreadOpen: Boolean = false,
     val newThreadProjectId: String? = null,
     val newThreadBranches: List<GitRef> = emptyList(),
@@ -241,6 +252,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var pullRequestDiffJob: Job? = null
     private var connectJob: Job? = null
     private var shellRefreshJob: Job? = null
+    private var projectCloneFeed: RawStream? = null
+    private var projectCloneJob: Job? = null
     private var reconnectJob: Job? = null
     private var modelsJob: Job? = null
     private var branchesJob: Job? = null
@@ -397,6 +410,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 cachedEnvironmentId = result.first.config.environment.environmentId
                 startShellWatch()
+                startProjectCloneWatch()
                 ensureModelsLoaded(force = true, quiet = true)
                 viewModelScope.launch(Dispatchers.IO) {
                     runCatching {
@@ -543,6 +557,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 connectionNote = null,
             )
             startShellWatch()
+            startProjectCloneWatch()
             ensureModelsLoaded(force = false)
             // Websocket feeds can be torn down while Android backgrounds the
             // app even though plain HTTP still works. Re-subscribe to the open
@@ -631,6 +646,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 diff = null,
                 files = null,
                 usage = null,
+                addProjectOpen = false,
+                projectClones = emptyList(),
                 newThreadOpen = false,
                 tab = AppTab.Threads,
                 projectFilter = null,
@@ -2080,6 +2097,200 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (current.error != null) state = state.copy(thread = current.copy(error = null))
     }
 
+    // --------------------------------------------------------------- add project
+
+    fun openAddProject() {
+        state = state.copy(addProjectOpen = true)
+    }
+
+    fun closeAddProject() {
+        state = state.copy(addProjectOpen = false)
+    }
+
+    suspend fun discoverSourceControl(): SourceControlDiscoveryResult {
+        val conn = connection ?: throw T3Exception("Connect to a server first.")
+        return withContext(Dispatchers.IO) { conn.discoverSourceControl() }
+    }
+
+    suspend fun browseProjectDirectory(path: String): FilesystemBrowseResult {
+        val conn = connection ?: throw T3Exception("Connect to a server first.")
+        return withContext(Dispatchers.IO) { conn.browseFiles(path) }
+    }
+
+    suspend fun inspectRepository(path: String): VcsStatus {
+        val conn = connection ?: throw T3Exception("Connect to a server first.")
+        return withContext(Dispatchers.IO) { conn.vcsStatus(path) }
+    }
+
+    /** Adds an existing folder (including a local Git checkout) as a project. */
+    suspend fun addExistingProject(workspaceRoot: String, title: String = ""): Project {
+        val conn = connection ?: throw T3Exception("Connect to a server first.")
+        return withContext(Dispatchers.IO) {
+            conn.createProject(workspaceRoot = workspaceRoot, title = title)
+        }
+    }
+
+    suspend fun createNamedProject(name: String): ProjectCreateNewResult {
+        val conn = connection ?: throw T3Exception("Connect to a server first.")
+        return withContext(Dispatchers.IO) { conn.createNamedProject(name) }
+    }
+
+    suspend fun lookupRepository(provider: String, repository: String): SourceControlRepositoryInfo {
+        val conn = connection ?: throw T3Exception("Connect to a server first.")
+        return withContext(Dispatchers.IO) { conn.lookupRepository(provider, repository) }
+    }
+
+    suspend fun cloneRepository(
+        remoteUrl: String,
+        destinationPath: String,
+        provider: String = "",
+        repository: String = "",
+    ): SourceControlCloneResult {
+        val conn = connection ?: throw T3Exception("Connect to a server first.")
+        return withContext(Dispatchers.IO) {
+            conn.cloneRepository(
+                remoteUrl = remoteUrl,
+                destinationPath = destinationPath,
+                provider = provider,
+                repository = repository,
+            )
+        }
+    }
+
+    suspend fun startProjectClone(
+        projectId: String,
+        title: String,
+        remoteUrl: String,
+        destinationPath: String,
+        provider: String = "",
+        repository: String = "",
+    ): ProjectCloneStartResult {
+        val conn = connection ?: throw T3Exception("Connect to a server first.")
+        return withContext(Dispatchers.IO) {
+            conn.startProjectClone(
+                projectId = projectId,
+                title = title,
+                remoteUrl = remoteUrl,
+                destinationPath = destinationPath,
+                provider = provider,
+                repository = repository,
+            )
+        }
+    }
+
+    suspend fun publishRepository(
+        cwd: String,
+        provider: String,
+        repository: String,
+    ) {
+        val conn = connection ?: throw T3Exception("Connect to a server first.")
+        withContext(Dispatchers.IO) {
+            conn.publishRepository(cwd = cwd, provider = provider, repository = repository)
+        }
+    }
+
+    suspend fun awaitProject(projectId: String, timeoutMs: Long = 15_000L): Project? {
+        val conn = connection ?: return null
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val shell = withContext(Dispatchers.IO) {
+                runCatching { conn.shell() }.getOrNull()
+            }
+            if (shell != null) {
+                applyShell(shell)
+                shell.projects.firstOrNull { it.id == projectId }?.let { return it }
+            }
+            delay(350)
+        }
+        return state.projects.firstOrNull { it.id == projectId }
+    }
+
+    fun finishAddProject(project: Project, openThread: Boolean = true) {
+        val title = project.title.ifBlank { "Project" }
+        state = state.copy(
+            addProjectOpen = false,
+            projects = state.projects.filterNot { it.id == project.id } + project,
+            projectFilter = project.id,
+            toast = "Added $title",
+            tab = if (openThread) state.tab else AppTab.Projects,
+            newThreadOpen = openThread,
+            newThreadProjectId = if (openThread) project.id else state.newThreadProjectId,
+        )
+        if (openThread) {
+            loadNewThreadBranches(project.id)
+        }
+        refresh()
+    }
+
+    fun cancelProjectClone(projectId: String) {
+        val conn = connection ?: return
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { conn.cancelProjectClone(projectId) }
+            }.onFailure { toast("Could not stop clone. ${describe(it)}") }
+        }
+    }
+
+    fun retryProjectClone(projectId: String) {
+        val conn = connection ?: return
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { conn.retryProjectClone(projectId) }
+            }.onFailure { toast("Could not retry clone. ${describe(it)}") }
+        }
+    }
+
+    private fun startProjectCloneWatch() {
+        if (projectCloneJob?.isActive == true) return
+        val conn = connection ?: return
+        if (conn.config.capabilities.projectCloneTracking != true) return
+        projectCloneJob?.cancel()
+        projectCloneJob = viewModelScope.launch {
+            var attempts = 0
+            while (isActive && connection === conn) {
+                var feed: RawStream? = null
+                try {
+                    feed = withContext(Dispatchers.IO) {
+                        conn.openStream("subscribeProjectClones")
+                    }
+                    projectCloneFeed = feed
+                    attempts = 0
+                    feed.items().collect { item ->
+                        val clones = runCatching {
+                            T3Core.json.decodeFromJsonElement<List<ProjectCloneSnapshot>>(item)
+                        }.getOrNull() ?: return@collect
+                        state = state.copy(projectClones = clones)
+                        val finished = clones.filter { it.phase == "done" }
+                        if (finished.isNotEmpty()) {
+                            // The project appears through subscribeShell. Refresh
+                            // once so the list is complete without waiting for it.
+                            refresh()
+                        }
+                        val running = clones.filter { it.phase == "running" }
+                        if (running.isEmpty() && clones.isNotEmpty()) {
+                            delay(4_000)
+                            if (state.projectClones == clones) {
+                                state = state.copy(projectClones = emptyList())
+                            }
+                        }
+                    }
+                    if (connection === conn && state.config != null) {
+                        attempts++
+                        delay((750L * attempts).coerceAtMost(6_000L))
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    if (connection !== conn) break
+                    attempts++
+                    delay((900L * attempts).coerceAtMost(8_000L))
+                } finally {
+                    runCatching { feed?.close() }
+                }
+            }
+        }
+    }
+
     // ----------------------------------------------------------------- new thread
 
     fun openNewThread(projectId: String? = null) {
@@ -2678,6 +2889,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pullRequestsJob = null
         shellRefreshJob?.cancel()
         shellRefreshJob = null
+        projectCloneJob?.cancel()
+        projectCloneJob = null
+        projectCloneFeed?.close()
+        projectCloneFeed = null
         modelsJob?.cancel()
         modelsJob = null
         connection?.close()

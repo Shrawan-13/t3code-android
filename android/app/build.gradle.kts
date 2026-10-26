@@ -19,8 +19,8 @@ android {
         applicationId = "com.t3codes.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 15
-        versionName = "0.3.0"
+        versionCode = 16
+        versionName = "0.4.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -84,5 +84,12 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.commonmark:commonmark:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.24.0")
+    implementation("org.commonmark:commonmark-ext-autolink:0.24.0")
+    implementation("org.commonmark:commonmark-ext-task-list-items:0.24.0")
+    implementation("org.commonmark:commonmark-ext-ins:0.24.0")
+    implementation("io.coil-kt:coil-compose:2.7.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

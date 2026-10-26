@@ -3,6 +3,9 @@ package com.t3codes.core
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 @Serializable
 data class Platform(val os: String = "", val arch: String = "")
@@ -601,3 +604,132 @@ data class ProjectSnapshot(
     val projects: List<Project> = emptyList(),
     val updatedAt: String = "",
 )
+
+@Serializable
+data class ProjectCreateNewResult(
+    val projectId: String = "",
+    val workspaceRoot: String = "",
+    val commitError: String? = null,
+)
+
+@Serializable
+data class SourceControlCloneResult(
+    val cwd: String = "",
+    val remoteUrl: String = "",
+    val repository: SourceControlRepositoryInfo? = null,
+)
+
+@Serializable
+data class ProjectCloneStartResult(
+    val projectId: String = "",
+    val cwd: String = "",
+    val remoteUrl: String = "",
+    val repository: SourceControlRepositoryInfo? = null,
+)
+
+@Serializable
+data class FilesystemBrowseEntry(
+    val name: String = "",
+    val fullPath: String = "",
+)
+
+@Serializable
+data class FilesystemBrowseResult(
+    val parentPath: String = "",
+    val entries: List<FilesystemBrowseEntry> = emptyList(),
+)
+
+@Serializable
+data class SourceControlRepositoryInfo(
+    val provider: String = "",
+    val nameWithOwner: String = "",
+    val url: String = "",
+    val sshUrl: String = "",
+)
+
+@Serializable
+data class SourceControlAccount(
+    val host: String = "",
+    val account: String = "",
+    val active: Boolean = false,
+    val authenticated: Boolean = false,
+    val error: String? = null,
+    val environmentVariable: String? = null,
+)
+
+@Serializable
+data class SourceControlProviderAuth(
+    val status: String = "",
+    val account: JsonElement? = null,
+    val host: JsonElement? = null,
+    val detail: JsonElement? = null,
+    val accounts: List<SourceControlAccount> = emptyList(),
+) {
+    val accountName: String?
+        get() = account.optionString()
+            ?: accounts.firstOrNull { it.active && it.authenticated }?.account
+            ?: accounts.firstOrNull { it.authenticated }?.account
+}
+
+@Serializable
+data class SourceControlProviderDiscovery(
+    val kind: String = "",
+    val label: String = "",
+    val executable: String? = null,
+    val status: String = "",
+    val version: JsonElement? = null,
+    val installHint: String = "",
+    val detail: JsonElement? = null,
+    val auth: SourceControlProviderAuth = SourceControlProviderAuth(),
+) {
+    val isReady: Boolean
+        get() = status == "available" && auth.status != "unauthenticated"
+
+    val readinessHint: String
+        get() = detail.optionString()
+            ?: auth.detail.optionString()
+            ?: installHint
+}
+
+@Serializable
+data class SourceControlDiscoveryResult(
+    val versionControlSystems: List<JsonElement> = emptyList(),
+    val sourceControlProviders: List<SourceControlProviderDiscovery> = emptyList(),
+)
+
+@Serializable
+data class ProjectCloneSnapshot(
+    val projectId: String = "",
+    val remoteUrl: String = "",
+    val destinationPath: String = "",
+    val repository: SourceControlRepositoryInfo? = null,
+    val phase: String = "",
+    val stage: String = "",
+    val percent: Int? = null,
+    val detail: String? = null,
+    val stalled: Boolean = false,
+    val error: String? = null,
+    val startedAt: String = "",
+    val endedAt: String? = null,
+    val sequence: Int = 0,
+)
+
+@Serializable
+data class ProjectCloneActionResult(val applied: Boolean = false)
+
+/** Effect encodes Option values either as an object or a bare value. */
+fun JsonElement?.optionString(): String? {
+    val value = this ?: return null
+    return when (value) {
+        is JsonPrimitive -> value.contentOrNull
+        is JsonObject -> {
+            val nested = value["value"] ?: value["account"]
+            when (nested) {
+                null -> null
+                is JsonPrimitive -> nested.contentOrNull
+                else -> nested.optionString()
+            }
+        }
+        else -> null
+    }
+}

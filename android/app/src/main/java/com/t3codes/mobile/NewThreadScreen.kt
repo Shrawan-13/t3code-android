@@ -40,6 +40,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -224,6 +225,13 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                                 },
                             )
                         }
+                        DropdownMenuItem(
+                            text = { Text("Add project…") },
+                            onClick = {
+                                projectMenuOpen = false
+                                viewModel.openAddProject()
+                            },
+                        )
                     }
                 }
                 Spacer(Modifier.height(12.dp))
@@ -235,6 +243,10 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                 if (state.projects.isEmpty()) {
                     Spacer(Modifier.height(20.dp))
                     ErrorBanner(message = "No projects are available on this server yet.")
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = viewModel::openAddProject) {
+                        Text("Add a project")
+                    }
                 }
                 }
             }
