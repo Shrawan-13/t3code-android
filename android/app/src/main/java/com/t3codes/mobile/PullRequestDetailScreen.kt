@@ -43,6 +43,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -220,6 +221,7 @@ fun PullRequestDetailScreen(state: UiState, viewModel: MainViewModel) {
                 onClick = { viewModel.setPullRequestTab("overview") },
                 label = { Text("Overview") },
                 shape = CircleShape,
+                colors = t3ChipColors(),
             )
             FilterChip(
                 selected = ui.tab == "files",
@@ -234,6 +236,7 @@ fun PullRequestDetailScreen(state: UiState, viewModel: MainViewModel) {
                     )
                 },
                 shape = CircleShape,
+                colors = t3ChipColors(),
             )
         }
 
@@ -511,16 +514,18 @@ private fun PullRequestMergeCard(
             )
             Spacer(Modifier.height(12.dp))
             Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
                 methods.forEach { method ->
                     FilterChip(
                         selected = selectedMethod == method,
                         onClick = { onSelectMethod(method) },
-                        label = { Text(mergeMethodLabel(method)) },
+                        label = { Text(mergeMethodShortLabel(method), maxLines = 1) },
                         enabled = busy.not() && method in detail.capabilities.mergeMethods,
                         shape = CircleShape,
+                        modifier = Modifier.weight(1f),
+                        colors = t3ChipColors(),
                     )
                 }
             }
@@ -868,7 +873,7 @@ private fun DiffLineRow(line: PullRequestDiffLine) {
 private fun PrStatusPill(text: String, color: Color) {
     Surface(
         shape = CircleShape,
-        color = color.copy(alpha = 0.12f),
+        color = color.copy(alpha = 0.16f),
     ) {
         Text(
             text = text,
@@ -888,6 +893,20 @@ private fun mergeMethodLabel(method: String): String = when (method) {
     "rebase" -> "Rebase and merge"
     else -> "Squash and merge"
 }
+
+private fun mergeMethodShortLabel(method: String): String = when (method) {
+    "merge" -> "Merge commit"
+    "rebase" -> "Rebase"
+    else -> "Squash"
+}
+
+@Composable
+private fun t3ChipColors() = FilterChipDefaults.filterChipColors(
+    containerColor = Color.Transparent,
+    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+)
 
 private fun mergeMethodDescription(method: String): String = when (method) {
     "merge" -> "The commits will be kept and a merge commit added."
