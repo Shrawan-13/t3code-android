@@ -128,17 +128,10 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
     val selectedProject = state.projectFilter?.let { projectsById[it] }
     val settledResetKey = "${state.projectFilter.orEmpty()}:$query:${state.showArchived}"
     LaunchedEffect(settledResetKey) { settledVisible = SETTLED_PAGE_SIZE }
-    val filterCount = listOf(
-        state.projectFilter != null,
-        !state.showSettled,
-        state.showArchived,
-    ).count { it }
-
     Column(modifier = Modifier.fillMaxSize()) {
         HomeTopBar(
             query = state.search,
             searchOpen = searchOpen,
-            filterCount = filterCount,
             onToggleSearch = {
                 if (searchOpen) viewModel.setSearch("")
                 searchOpen = !searchOpen
@@ -524,7 +517,6 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
 private fun HomeTopBar(
     query: String,
     searchOpen: Boolean,
-    filterCount: Int,
     onToggleSearch: () -> Unit,
     onRefresh: () -> Unit,
     onSettings: () -> Unit,
@@ -541,35 +533,7 @@ private fun HomeTopBar(
             fontWeight = FontWeight.Bold,
             letterSpacing = (-0.6).sp,
         )
-        Spacer(Modifier.width(8.dp))
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.13f),
-        ) {
-            Text(
-                text = "ALPHA",
-                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                style = MaterialTheme.typography.labelSmall,
-                fontSize = 9.sp,
-                letterSpacing = 1.1.sp,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
         Spacer(Modifier.weight(1f))
-        if (filterCount > 0) {
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-            ) {
-                Text(
-                    text = filterCount.toString(),
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            Spacer(Modifier.width(4.dp))
-        }
         IconButton(onClick = onToggleSearch) {
             Icon(
                 if (searchOpen || query.isNotBlank()) Icons.Rounded.Close else Icons.Rounded.Search,
