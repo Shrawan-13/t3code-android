@@ -216,20 +216,7 @@ data class UiState(
     val terminal: TerminalUi? = null,
     val diff: DiffUi? = null,
     val files: FilesUi? = null,
-    val themeMode: String = "system",
-    val lightThemeId: String = "t3-code",
-    val darkThemeId: String = "t3-code",
-    val baseFontSize: Int = AppSettings.DEFAULT_BASE_FONT_SIZE,
-    val terminalFontSize: Float? = null,
-    val codeFontSize: Int? = null,
-    val codeWordBreak: Boolean = false,
-    val mathRenderingEnabled: Boolean = false,
-    val androidNavStyle: String = "material",
-    val workingShelfEnabled: Boolean = true,
-    val followUpBehavior: String = "steer",
-    val projectGroupingMode: String = "repository",
-    val useLastProjectForNewThreads: Boolean = true,
-    val planModeLegacyEnabled: Boolean = false,
+    val themePref: ThemePref = ThemePref.System,
     val selfTestBusy: Boolean = false,
     val selfTestLog: List<String> = emptyList(),
     val backgroundSyncEnabled: Boolean = false,
@@ -282,20 +269,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         UiState(
             baseUrl = prefs.getString(KEY_BASE, "http://127.0.0.1:3773") ?: "http://127.0.0.1:3773",
             token = prefs.getString(KEY_TOKEN, "") ?: "",
-            themeMode = AppSettings.themeMode(application),
-            lightThemeId = AppSettings.lightThemeId(application),
-            darkThemeId = AppSettings.darkThemeId(application),
-            baseFontSize = AppSettings.baseFontSize(application),
-            terminalFontSize = AppSettings.terminalFontSize(application),
-            codeFontSize = AppSettings.codeFontSize(application),
-            codeWordBreak = AppSettings.codeWordBreak(application),
-            mathRenderingEnabled = AppSettings.mathRenderingEnabled(application),
-            androidNavStyle = AppSettings.androidNavStyle(application),
-            workingShelfEnabled = AppSettings.workingShelfEnabled(application),
-            followUpBehavior = AppSettings.followUpBehavior(application),
-            projectGroupingMode = AppSettings.projectGroupingMode(application),
-            useLastProjectForNewThreads = AppSettings.useLastProjectForNewThreads(application),
-            planModeLegacyEnabled = AppSettings.planModeLegacyEnabled(application),
+            themePref = runCatching {
+                ThemePref.valueOf(prefs.getString(KEY_THEME, ThemePref.System.name) ?: ThemePref.System.name)
+            }.getOrDefault(ThemePref.System),
             backgroundSyncEnabled = prefs.getBoolean(AppPreferences.BACKGROUND_SYNC, false),
         ),
     )
@@ -1248,74 +1224,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         state = state.copy(showArchived = !state.showArchived)
     }
 
-    fun setThemeMode(mode: String) {
-        AppSettings.setThemeMode(getApplication(), mode)
-        state = state.copy(themeMode = mode)
-    }
-
-    fun setThemeId(appearance: String, id: String) {
-        AppSettings.setThemeId(getApplication(), appearance, id)
-        state = if (appearance == "light") state.copy(lightThemeId = id) else state.copy(darkThemeId = id)
-    }
-
-    fun setThemeIdBoth(id: String) {
-        AppSettings.setThemeIdBoth(getApplication(), id)
-        state = state.copy(lightThemeId = id, darkThemeId = id)
-    }
-
-    fun setAndroidNavStyle(style: String) {
-        AppSettings.setAndroidNavStyle(getApplication(), style)
-        state = state.copy(androidNavStyle = style)
-    }
-
-    fun setBaseFontSize(value: Int) {
-        AppSettings.setBaseFontSize(getApplication(), value)
-        state = state.copy(baseFontSize = value.coerceIn(AppSettings.MIN_BASE_FONT_SIZE, AppSettings.MAX_BASE_FONT_SIZE))
-    }
-
-    fun setTerminalFontSize(value: Float?) {
-        AppSettings.setTerminalFontSize(getApplication(), value)
-        state = state.copy(terminalFontSize = value)
-    }
-
-    fun setCodeFontSize(value: Int?) {
-        AppSettings.setCodeFontSize(getApplication(), value)
-        state = state.copy(codeFontSize = value)
-    }
-
-    fun setCodeWordBreak(value: Boolean) {
-        AppSettings.setCodeWordBreak(getApplication(), value)
-        state = state.copy(codeWordBreak = value)
-    }
-
-    fun setMathRenderingEnabled(value: Boolean) {
-        AppSettings.setMathRenderingEnabled(getApplication(), value)
-        state = state.copy(mathRenderingEnabled = value)
-    }
-
-    fun setWorkingShelfEnabled(value: Boolean) {
-        AppSettings.setWorkingShelfEnabled(getApplication(), value)
-        state = state.copy(workingShelfEnabled = value)
-    }
-
-    fun setFollowUpBehavior(value: String) {
-        AppSettings.setFollowUpBehavior(getApplication(), value)
-        state = state.copy(followUpBehavior = value)
-    }
-
-    fun setProjectGroupingMode(value: String) {
-        AppSettings.setProjectGroupingMode(getApplication(), value)
-        state = state.copy(projectGroupingMode = value)
-    }
-
-    fun setUseLastProjectForNewThreads(value: Boolean) {
-        AppSettings.setUseLastProjectForNewThreads(getApplication(), value)
-        state = state.copy(useLastProjectForNewThreads = value)
-    }
-
-    fun setPlanModeLegacyEnabled(value: Boolean) {
-        AppSettings.setPlanModeLegacyEnabled(getApplication(), value)
-        state = state.copy(planModeLegacyEnabled = value)
+    fun setThemePref(pref: ThemePref) {
+        prefs.edit().putString(KEY_THEME, pref.name).apply()
+        state = state.copy(themePref = pref)
     }
 
     // -------------------------------------------------------------------- threads
@@ -3051,6 +2962,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val LOG_TAG = "T3Live"
         const val KEY_BASE = "base_url"
         const val KEY_TOKEN = "token"
+        const val KEY_THEME = "theme_pref"
         const val KEY_AUTO = "auto_connect"
         const val MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
         const val MAX_TERMINAL_CHARS = 300_000

@@ -34,12 +34,7 @@ class MainActivity : ComponentActivity() {
                     vm.openThreadFromNotification(threadId)
                 }
             }
-            T3Theme(
-                themeMode = vm.state.themeMode,
-                lightThemeId = vm.state.lightThemeId,
-                darkThemeId = vm.state.darkThemeId,
-                baseFontSize = vm.state.baseFontSize,
-            ) {
+            T3Theme(themePref = vm.state.themePref) {
                 T3App(vm)
             }
         }
