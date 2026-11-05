@@ -86,6 +86,8 @@ data class PullRequestCapabilities(
     val stacks: Boolean? = null,
     val stackActions: Boolean? = null,
     val labels: Boolean? = null,
+    /** Absent on servers that cannot set a message on the merge commit. */
+    val mergeCommitMessage: Boolean? = null,
 )
 
 @Serializable

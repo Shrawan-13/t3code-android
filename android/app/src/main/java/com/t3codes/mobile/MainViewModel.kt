@@ -1067,13 +1067,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun mergePullRequest(method: String) {
+    fun mergePullRequest(method: String, mergeCommitMessage: String? = null) {
         val current = state.pullRequestDetail ?: return
         if (current.actionBusy) return
-        runPullRequestAction("merge", method)
+        runPullRequestAction("merge", method, mergeCommitMessage)
     }
 
-    fun runPullRequestAction(action: String, mergeMethod: String? = null) {
+    fun runPullRequestAction(
+        action: String,
+        mergeMethod: String? = null,
+        mergeCommitMessage: String? = null,
+    ) {
         val current = state.pullRequestDetail ?: return
         val conn = connection ?: return
         if (current.actionBusy) return
@@ -1089,6 +1093,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     put("number", current.entry.number)
                     put("action", action)
                     mergeMethod?.let { put("mergeMethod", it) }
+                    mergeCommitMessage?.trim()?.takeIf { it.isNotEmpty() }
+                        ?.let { put("mergeCommitMessage", it) }
                 }
                 withContext(Dispatchers.IO) { conn.callRaw("pullRequests.runAction", payload) }
                 val latest = state.pullRequestDetail ?: return@launch

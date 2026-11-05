@@ -34,6 +34,8 @@ All releases:
 - Instant local updates for settle, archive, delete, pin, rename, and model
   changes, reconciled from the live shell afterwards
 - Pull-requests list with open/merged/closed filters and direct links to GitHub
+- Pull request detail with checks, files, a copyable Markdown description, and
+  a commit description option on merge (shown when the server supports it)
 - Live thread timeline: full CommonMark/GFM Markdown (tables, task lists,
   nested lists, links, images, HTML, quotes, and copyable code), compact tool
   calls grouped into collapsible work logs, reasoning, commands, file changes,

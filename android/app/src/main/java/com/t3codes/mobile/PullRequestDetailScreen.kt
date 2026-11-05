@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CallMerge
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -48,6 +49,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -61,6 +64,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -78,7 +83,9 @@ fun PullRequestDetailScreen(state: UiState, viewModel: MainViewModel) {
     val uriHandler = LocalUriHandler.current
     var menuOpen by remember { mutableStateOf(false) }
     var mergeDialog by remember { mutableStateOf(false) }
+    var descriptionSheet by remember { mutableStateOf(false) }
     val detail = ui.detail
+    val clipboard = LocalClipboardManager.current
 
     Column(
         modifier = Modifier
@@ -249,6 +256,7 @@ fun PullRequestDetailScreen(state: UiState, viewModel: MainViewModel) {
                 onSelectMethod = viewModel::setPullRequestMergeMethod,
                 onRetry = viewModel::loadPullRequestDetail,
                 onMerge = { mergeDialog = true },
+                onDescriptionOptions = { descriptionSheet = true },
             )
         }
     }
@@ -259,12 +267,62 @@ fun PullRequestDetailScreen(state: UiState, viewModel: MainViewModel) {
             method = ui.selectedMethod,
             busy = ui.actionBusy,
             onMethod = viewModel::setPullRequestMergeMethod,
-            onConfirm = {
+            onConfirm = { commitMessage ->
                 mergeDialog = false
-                viewModel.mergePullRequest(ui.selectedMethod)
+                viewModel.mergePullRequest(ui.selectedMethod, commitMessage)
             },
             onDismiss = { mergeDialog = false },
         )
+    }
+
+    if (descriptionSheet && detail != null) {
+        ModalBottomSheet(
+            onDismissRequest = { descriptionSheet = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 28.dp),
+            ) {
+                Text(
+                    text = "Description",
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            clipboard.setText(AnnotatedString(detail.body))
+                            descriptionSheet = false
+                            viewModel.showMessage("Description copied as Markdown")
+                        }
+                        .padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Rounded.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column {
+                        Text(
+                            text = "Copy as Markdown",
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            text = "Copies the raw pull request description source",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -276,6 +334,7 @@ private fun PullRequestOverviewTab(
     onSelectMethod: (String) -> Unit,
     onRetry: () -> Unit,
     onMerge: () -> Unit,
+    onDescriptionOptions: () -> Unit,
 ) {
     if (detail == null) {
         if (ui.loading) {
@@ -351,12 +410,26 @@ private fun PullRequestOverviewTab(
             item {
                 GroupedCard {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Description",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(10.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Description",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(
+                                onClick = onDescriptionOptions,
+                                modifier = Modifier.size(32.dp),
+                            ) {
+                                Icon(
+                                    Icons.Rounded.MoreVert,
+                                    contentDescription = "Description options",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
                         MarkdownText(
                             text = detail.body,
                             style = MaterialTheme.typography.bodyMedium,
@@ -632,9 +705,12 @@ private fun MergeConfirmDialog(
     method: String,
     busy: Boolean,
     onMethod: (String) -> Unit,
-    onConfirm: () -> Unit,
+    onConfirm: (String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var commitMessage by rememberSaveable { mutableStateOf("") }
+    val serverSupportsMessage = detail.capabilities.mergeCommitMessage == true
+    val rebaseSelected = method == "rebase"
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(mergeMethodLabel(method)) },
@@ -644,6 +720,27 @@ private fun MergeConfirmDialog(
                     "Merge ${detail.headBranch} into ${detail.baseBranch}? " +
                         mergeMethodDescription(method),
                 )
+                if (serverSupportsMessage) {
+                    if (rebaseSelected) {
+                        Text(
+                            text = "Rebase merges do not create a merge commit, " +
+                                "so a commit description is not used.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        OutlinedTextField(
+                            value = commitMessage,
+                            onValueChange = { commitMessage = it },
+                            label = { Text("Commit description (optional)") },
+                            placeholder = { Text("Extended description for the merge commit") },
+                            minLines = 2,
+                            maxLines = 5,
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
                 Text(
                     text = "This cannot be undone from the app.",
                     style = MaterialTheme.typography.bodySmall,
@@ -652,7 +749,18 @@ private fun MergeConfirmDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onConfirm, enabled = !busy) {
+            TextButton(
+                onClick = {
+                    onConfirm(
+                        if (serverSupportsMessage && !rebaseSelected) {
+                            commitMessage.trim().ifBlank { null }
+                        } else {
+                            null
+                        },
+                    )
+                },
+                enabled = !busy,
+            ) {
                 Text(if (busy) "Merging…" else "Merge")
             }
         },
