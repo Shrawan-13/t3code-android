@@ -218,7 +218,7 @@ object AppSettings {
     /** JSON array of microphone kinds, in preferred order. */
     fun microphoneOrder(context: Context): List<String> =
         prefs(context).getString(MICROPHONE_ORDER, null)
-            ?.let { raw -> runCatching { T3Core.json.parseToJsonElement(raw) }.getOrNull() }
+            ?.let { raw -> runCatching { com.t3codes.core.T3Core.json.parseToJsonElement(raw) }.getOrNull() }
             ?.let { element ->
                 (element as? kotlinx.serialization.json.JsonArray)
                     ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
@@ -226,7 +226,9 @@ object AppSettings {
             .orEmpty()
 
     fun setMicrophoneOrder(context: Context, kinds: List<String>) {
-        val json = kotlinx.serialization.json.buildJsonArray { kinds.forEach { add(it) } }.toString()
+        val json = kotlinx.serialization.json.buildJsonArray {
+            kinds.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+        }.toString()
         prefs(context).edit().putString(MICROPHONE_ORDER, json).apply()
     }
 

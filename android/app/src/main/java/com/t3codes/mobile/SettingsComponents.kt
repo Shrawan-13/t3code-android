@@ -49,7 +49,7 @@ fun SettingsScaffold(
             title = title,
             subtitle = subtitle,
             leading = { BackButton(onBack) },
-            actions = actions,
+            actions = { actions?.invoke() },
         )
         Column(
             modifier = Modifier

@@ -840,11 +840,11 @@ private val IRIS_THEME_DARK = ThemePalette(
 object ThemePalettes {
     fun byId(id: String, dark: Boolean): ThemePalette = when (id) {
         "t3-code" -> if (dark) T3_CODE_DARK else T3_CODE_LIGHT
-        "t3-chat" -> if (dark) T3_CHAT_DARK else T3_CHAT_BASE
-        "grove" -> if (dark) GROVE_DARK else GROVE_BASE
-        "ocean" -> if (dark) OCEAN_DARK else OCEAN_BASE
-        "ember" -> if (dark) EMBER_DARK else EMBER_BASE
-        "iris" -> if (dark) IRIS_DARK else IRIS_BASE
+        "t3-chat" -> if (dark) T3_CHAT_THEME_DARK else T3_CHAT_THEME_BASE
+        "grove" -> if (dark) GROVE_THEME_DARK else GROVE_THEME_BASE
+        "ocean" -> if (dark) OCEAN_THEME_DARK else OCEAN_THEME_BASE
+        "ember" -> if (dark) EMBER_THEME_DARK else EMBER_THEME_BASE
+        "iris" -> if (dark) IRIS_THEME_DARK else IRIS_THEME_BASE
         else -> if (dark) T3_CODE_DARK else T3_CODE_LIGHT
     }
 }

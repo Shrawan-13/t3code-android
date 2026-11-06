@@ -200,20 +200,33 @@ private fun extendedColorsForSystem(dark: Boolean) = T3Colors(
     onUpdateSurface = if (dark) Color(0xFF9DBBFF) else Color(0xFF1B4ED8),
 )
 
+private fun textStyle(
+    weight: FontWeight,
+    size: Int,
+    lineHeight: Int,
+    letterSpacing: Double = 0.0,
+) = TextStyle(
+    fontFamily = FontFamily.SansSerif,
+    fontWeight = weight,
+    fontSize = size.sp,
+    lineHeight = lineHeight.sp,
+    letterSpacing = letterSpacing.toFloat().sp,
+)
+
 private val BaseTypography = Typography(
-    displayLarge = TextStyle(FontFamily.SansSerif, FontWeight.Bold, 52.sp, 58.sp, letterSpacing = (-1.5).sp),
-    displaySmall = TextStyle(FontFamily.SansSerif, FontWeight.Bold, 34.sp, 40.sp, letterSpacing = (-1).sp),
-    headlineMedium = TextStyle(FontFamily.SansSerif, FontWeight.SemiBold, 28.sp, 34.sp, letterSpacing = (-0.4).sp),
-    headlineSmall = TextStyle(FontFamily.SansSerif, FontWeight.SemiBold, 24.sp, 30.sp, letterSpacing = (-0.2).sp),
-    titleLarge = TextStyle(FontFamily.SansSerif, FontWeight.SemiBold, 20.sp, 26.sp),
-    titleMedium = TextStyle(FontFamily.SansSerif, FontWeight.SemiBold, 16.sp, 22.sp, letterSpacing = 0.1.sp),
-    titleSmall = TextStyle(FontFamily.SansSerif, FontWeight.SemiBold, 14.sp, 20.sp),
-    bodyLarge = TextStyle(FontFamily.SansSerif, FontWeight.Normal, 16.sp, 24.sp, letterSpacing = 0.15.sp),
-    bodyMedium = TextStyle(FontFamily.SansSerif, FontWeight.Normal, 14.sp, 21.sp, letterSpacing = 0.15.sp),
-    bodySmall = TextStyle(FontFamily.SansSerif, FontWeight.Normal, 12.sp, 17.sp, letterSpacing = 0.2.sp),
-    labelLarge = TextStyle(FontFamily.SansSerif, FontWeight.Medium, 14.sp, 20.sp, letterSpacing = 0.1.sp),
-    labelMedium = TextStyle(FontFamily.SansSerif, FontWeight.Medium, 12.sp, 16.sp, letterSpacing = 0.4.sp),
-    labelSmall = TextStyle(FontFamily.SansSerif, FontWeight.Medium, 11.sp, 15.sp, letterSpacing = 0.4.sp),
+    displayLarge = textStyle(FontWeight.Bold, 52, 58, -1.5),
+    displaySmall = textStyle(FontWeight.Bold, 34, 40, -1.0),
+    headlineMedium = textStyle(FontWeight.SemiBold, 28, 34, -0.4),
+    headlineSmall = textStyle(FontWeight.SemiBold, 24, 30, -0.2),
+    titleLarge = textStyle(FontWeight.SemiBold, 20, 26),
+    titleMedium = textStyle(FontWeight.SemiBold, 16, 22, 0.1),
+    titleSmall = textStyle(FontWeight.SemiBold, 14, 20),
+    bodyLarge = textStyle(FontWeight.Normal, 16, 24, 0.15),
+    bodyMedium = textStyle(FontWeight.Normal, 14, 21, 0.15),
+    bodySmall = textStyle(FontWeight.Normal, 12, 17, 0.2),
+    labelLarge = textStyle(FontWeight.Medium, 14, 20, 0.1),
+    labelMedium = textStyle(FontWeight.Medium, 12, 16, 0.4),
+    labelSmall = textStyle(FontWeight.Medium, 11, 15, 0.4),
 )
 
 /** Scales every text style by [scale]; line heights scale with glyphs. */

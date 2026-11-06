@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BlurOn
-import androidx.compose.material.icons.rounded.CalendarClock
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.History
@@ -180,7 +180,7 @@ fun SettingsThreadsScreen(state: UiState, viewModel: MainViewModel) {
                         onCheckedChange = { viewModel.writeServerSetting("autoResumeLimitedThreads", JsonPrimitive(it), null) },
                     )
                     SettingsSwitchRow(
-                        icon = Icons.Rounded.CalendarClock,
+                        icon = Icons.Rounded.Schedule,
                         title = "Snooze until limits reset",
                         checked = scopeBool(state, "snoozeLimitedThreads", false),
                         enabled = !ManagedPolicy.isLocked(state.config, "snoozeLimitedThreads") && !state.serverSettingsWriting,
