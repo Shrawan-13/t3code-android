@@ -262,18 +262,20 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                                     runtimePickerOpen = true
                                 },
                             )
-                            DropdownMenuItem(
-                                text = { Text(if (planMode) "Leave plan mode" else "Plan mode") },
-                                leadingIcon = { Icon(Icons.Rounded.AutoAwesome, contentDescription = null) },
-                                onClick = {
-                                    menuOpen = false
-                                    viewModel.threadAction(
-                                        thread.threadId,
-                                        "setInteractionMode",
-                                        if (planMode) "default" else "plan",
-                                    )
-                                },
-                            )
+                            if (state.planModeLegacyEnabled) {
+                                DropdownMenuItem(
+                                    text = { Text(if (planMode) "Leave plan mode" else "Plan mode") },
+                                    leadingIcon = { Icon(Icons.Rounded.AutoAwesome, contentDescription = null) },
+                                    onClick = {
+                                        menuOpen = false
+                                        viewModel.threadAction(
+                                            thread.threadId,
+                                            "setInteractionMode",
+                                            if (planMode) "default" else "plan",
+                                        )
+                                    },
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Rename") },
                                 leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },

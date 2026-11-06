@@ -112,8 +112,8 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
             compareByDescending<ThreadShell> { it.latestUserMessageAt ?: it.updatedAt }
                 .thenByDescending { it.createdAt },
         )
-    val working = chats.filter(::isWorkingThread)
-    val activeChats = chats.filterNot(::isWorkingThread)
+    val working = if (state.workingShelfEnabled) chats.filter(::isWorkingThread) else emptyList()
+    val activeChats = if (state.workingShelfEnabled) chats.filterNot(::isWorkingThread) else chats
     val archived = state.archivedThreads.filter(::matches)
     val settled = (
         filtered.filter { it.settledAt != null && !it.isArchived && it.pinnedAt == null } +

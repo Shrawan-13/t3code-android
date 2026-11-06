@@ -2216,12 +2216,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         viewModelScope.launch {
             try {
+                val activeRunId = current.projection.thread.activeRunId ?: current.summary?.activeRunId
+                val steer = running && state.followUpBehavior == "steer" && !activeRunId.isNullOrBlank()
                 withContext(Dispatchers.IO) {
                     conn.sendMessage(
                         threadId = current.threadId,
                         text = trimmed,
                         attachments = current.pendingAttachments,
-                        mode = if (running) "queue_after_active" else "start_immediately",
+                        mode = when {
+                            !running -> "start_immediately"
+                            steer -> "steer_active"
+                            else -> "queue_after_active"
+                        },
+                        targetRunId = activeRunId.takeIf { steer },
                     )
                 }
                 val latest = state.thread
@@ -2774,9 +2781,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ----------------------------------------------------------------- new thread
 
     fun openNewThread(projectId: String? = null) {
+        val remembered = state.newThreadProjectId
+            ?.takeIf { id -> state.useLastProjectForNewThreads && state.projects.any { it.id == id } }
         state = state.copy(
             newThreadOpen = true,
-            newThreadProjectId = projectId ?: state.projectFilter ?: state.projects.firstOrNull()?.id,
+            newThreadProjectId = projectId
+                ?: state.projectFilter
+                ?: remembered
+                ?: state.projects.firstOrNull()?.id,
         )
     }
 
