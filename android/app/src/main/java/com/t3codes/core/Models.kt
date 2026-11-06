@@ -125,6 +125,7 @@ data class ServerConfig(
     val newProjectsRoot: String = "",
     val settings: JsonElement? = null,
     val keybindings: List<JsonElement> = emptyList(),
+    val managedPolicy: JsonElement? = null,
 )
 
 @Serializable
@@ -138,6 +139,8 @@ data class Project(
     val autoPull: Boolean? = null,
     val faviconPath: String? = null,
     val projectIcon: JsonElement? = null,
+    val pinned: Boolean = false,
+    val archived: Boolean = false,
     val scripts: List<JsonElement> = emptyList(),
     val createdAt: String = "",
     val updatedAt: String = "",
@@ -716,6 +719,35 @@ data class ProjectCloneSnapshot(
 
 @Serializable
 data class ProjectCloneActionResult(val applied: Boolean = false)
+
+@Serializable
+data class ScheduledTask(
+    val id: String = "",
+    val title: String = "",
+    val prompt: String = "",
+    val enabled: Boolean = false,
+    val schedule: JsonElement? = null,
+    val projectId: String = "",
+    val threadId: String? = null,
+    val modelSelection: ModelSelection? = null,
+    val runtimeMode: String = "",
+    val nextRunAt: String? = null,
+    val lastRunAt: String? = null,
+    val lastRunStatus: String = "",
+    val lastRunError: String? = null,
+    val runCount: Int = 0,
+    val createdAt: String = "",
+    val updatedAt: String = "",
+)
+
+@Serializable
+data class ScheduledTaskList(val tasks: List<ScheduledTask> = emptyList())
+
+@Serializable
+data class ServerNpmRelease(
+    val version: String = "",
+    val databaseMigration: Int? = null,
+)
 
 /** Effect encodes Option values either as an object or a bare value. */
 fun JsonElement?.optionString(): String? {

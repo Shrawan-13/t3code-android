@@ -111,6 +111,41 @@ class T3Connection internal constructor(
         return T3Core.ensureOk(Native.nativeCall(handle, method, payload.toString()))
     }
 
+    /** server.getSettings — the raw ServerSettings object (unwrapped defensively). */
+    fun getSettings(): JsonObject {
+        val raw = callRaw("server.getSettings")
+        return unwrapSettings(raw)
+    }
+
+    /** server.updateSettings with a patch. Returns the full updated settings object. */
+    fun updateSettings(patch: JsonObject): JsonObject {
+        val raw = callRaw(
+            "server.updateSettings",
+            buildJsonObject { put("patch", patch) },
+        )
+        return unwrapSettings(raw)
+    }
+
+    /** server.getDatabaseStorage — database table sizes for the Maintenance page. */
+    fun getDatabaseStorage(): JsonObject = callRaw("server.getDatabaseStorage").jsonObject
+
+    /** server.getStorageCleanupReport — reclaimable byte accounting (null when never run). */
+    fun getStorageCleanupReport(): JsonObject? = callRaw("server.getStorageCleanupReport") as? JsonObject
+
+    /** server.runStorageCleanup(dryRun) — reclaimable data cleanup. */
+    fun runStorageCleanup(dryRun: Boolean): JsonObject =
+        callRaw("server.runStorageCleanup", buildJsonObject { put("dryRun", dryRun) }).jsonObject
+
+    /** server.updateServer (check/trigger) — raw passthrough for the Maintenance page. */
+    fun updateServer(input: JsonObject): JsonElement = callRaw("server.updateServer", input)
+
+    private fun unwrapSettings(raw: JsonElement): JsonObject {
+        val obj = raw as? JsonObject
+            ?: throw T3Exception("server returned settings in an unexpected shape")
+        val nested = obj["settings"] as? JsonObject
+        return nested ?: obj
+    }
+
     fun callObject(method: String, payload: JsonElement = JsonObject(emptyMap())): JsonObject =
         callRaw(method, payload).jsonObject
 

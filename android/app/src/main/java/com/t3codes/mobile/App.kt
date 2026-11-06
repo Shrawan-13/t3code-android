@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.CallMerge
 import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.Forum
@@ -34,9 +35,29 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
+private fun visibleNavTabs(order: List<String>, hidden: List<String>): List<AppTab> =
+    order.filterNot { it in hidden }.mapNotNull { id ->
+        when (id) {
+            "threads" -> AppTab.Threads
+            "pullRequests" -> AppTab.PullRequests
+            "usage" -> AppTab.Usage
+            else -> null
+        }
+    }
+
+private fun navTabIcon(tab: AppTab): androidx.compose.ui.graphics.vector.ImageVector =
+    when (tab) {
+        AppTab.PullRequests -> Icons.Rounded.CallMerge
+        AppTab.Usage -> Icons.Rounded.BarChart
+        else -> Icons.Rounded.Forum
+    }
+
 @Composable
 fun T3App(viewModel: MainViewModel) {
     val state = viewModel.state
+    val bottomTabs = remember(state.navTabOrder, state.navHiddenTabs) {
+        visibleNavTabs(state.navTabOrder, state.navHiddenTabs)
+    }
     val snackbar = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -89,6 +110,7 @@ fun T3App(viewModel: MainViewModel) {
         enabled = !state.newThreadOpen && state.terminal == null && state.diff == null &&
             state.files == null && state.activeThreadId != null,
     ) { viewModel.closeThread() }
+    BackHandler(enabled = state.settingsPage != null) { viewModel.closeSettingsPage() }
     BackHandler(
         enabled = !state.newThreadOpen &&
             state.terminal == null &&
@@ -97,6 +119,7 @@ fun T3App(viewModel: MainViewModel) {
             state.activeThreadId == null &&
             state.connected &&
             state.tab != AppTab.Threads &&
+            state.settingsPage == null &&
             state.tab !in bottomTabs,
     ) { viewModel.selectTab(AppTab.Threads) }
     // The pull request detail sits above whichever list or thread opened it.
@@ -125,6 +148,9 @@ fun T3App(viewModel: MainViewModel) {
 
 @Composable
 private fun HomeScaffold(state: UiState, viewModel: MainViewModel) {
+    val bottomTabs = remember(state.navTabOrder, state.navHiddenTabs) {
+        visibleNavTabs(state.navTabOrder, state.navHiddenTabs)
+    }
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
@@ -140,10 +166,7 @@ private fun HomeScaffold(state: UiState, viewModel: MainViewModel) {
                             onClick = { viewModel.selectTab(tab) },
                             icon = {
                                 Icon(
-                                    imageVector = when (tab) {
-                                        AppTab.PullRequests -> Icons.Rounded.CallMerge
-                                        else -> Icons.Rounded.Forum
-                                    },
+                                    imageVector = navTabIcon(tab),
                                     contentDescription = tab.label,
                                 )
                             },
@@ -196,7 +219,7 @@ private fun HomeScaffold(state: UiState, viewModel: MainViewModel) {
                 AppTab.PullRequests -> PullRequestsScreen(state, viewModel)
                 AppTab.Projects -> ProjectsScreen(state, viewModel)
                 AppTab.Usage -> UsageScreen(state, viewModel)
-                AppTab.Settings -> SettingsScreen(state, viewModel)
+                AppTab.Settings -> SettingsRoot(state, viewModel)
             }
         }
     }

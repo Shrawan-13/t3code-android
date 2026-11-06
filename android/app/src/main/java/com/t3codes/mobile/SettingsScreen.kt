@@ -1,15 +1,8 @@
 package com.t3codes.mobile
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,468 +12,248 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BarChart
-import androidx.compose.material.icons.rounded.BugReport
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.CloudOff
-import androidx.compose.material.icons.rounded.Code
-import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.CallMerge
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.Logout
-import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Palette
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Smartphone
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.Science
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.ArrowForwardIos
+import androidx.compose.material.icons.rounded.SmartToy
+import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import com.t3codes.core.Provider
+
+/** Settings page ids. Null in state = the list itself. */
+object SettingsPages {
+    const val Environments = "environments"
+    const val Notifications = "notifications"
+    const val General = "general"
+    const val Appearance = "appearance"
+    const val Chat = "chat"
+    const val NavigationTabs = "navigationTabs"
+    const val Microphone = "microphone"
+    const val Providers = "providers"
+    const val Threads = "threads"
+    const val ScheduledTasks = "scheduledTasks"
+    const val Projects = "projects"
+    const val SourceControl = "sourceControl"
+    const val Worktrees = "worktrees"
+    const val Maintenance = "maintenance"
+    const val Labs = "labs"
+    const val About = "about"
+    const val ClientStorage = "clientStorage"
+    const val Licenses = "licenses"
+    const val Archive = "archive"
+    const val Diagnostics = "diagnostics"
+}
+
+/** Root of the Settings tab: list or one of the pages. */
+@Composable
+fun SettingsRoot(state: UiState, viewModel: MainViewModel) {
+    when (state.settingsPage) {
+        null -> SettingsList(state, viewModel)
+        SettingsPages.Environments -> SettingsEnvironmentsScreen(state, viewModel)
+        SettingsPages.Notifications -> SettingsNotificationsScreen(state, viewModel)
+        SettingsPages.General -> SettingsGeneralScreen(state, viewModel)
+        SettingsPages.Appearance -> SettingsAppearanceScreen(state, viewModel)
+        SettingsPages.Chat -> SettingsChatScreen(state, viewModel)
+        SettingsPages.NavigationTabs -> SettingsNavigationTabsScreen(state, viewModel)
+        SettingsPages.Microphone -> SettingsMicrophoneScreen(state, viewModel)
+        SettingsPages.Providers -> SettingsProvidersScreen(state, viewModel)
+        SettingsPages.Threads -> SettingsThreadsScreen(state, viewModel)
+        SettingsPages.ScheduledTasks -> SettingsScheduledTasksScreen(state, viewModel)
+        SettingsPages.Projects -> SettingsProjectsScreen(state, viewModel)
+        SettingsPages.SourceControl -> SettingsSourceControlScreen(state, viewModel)
+        SettingsPages.Worktrees -> SettingsWorktreesScreen(state, viewModel)
+        SettingsPages.Maintenance -> SettingsMaintenanceScreen(state, viewModel)
+        SettingsPages.Labs -> SettingsLabsScreen(state, viewModel)
+        SettingsPages.About -> SettingsAboutScreen(state, viewModel)
+        SettingsPages.ClientStorage -> SettingsClientStorageScreen(state, viewModel)
+        SettingsPages.Licenses -> SettingsLicensesScreen(state, viewModel)
+        SettingsPages.Archive -> SettingsArchiveScreen(state, viewModel)
+        SettingsPages.Diagnostics -> SettingsDiagnosticsScreen(state, viewModel)
+        else -> SettingsList(state, viewModel)
+    }
+}
+
+private data class SettingsListEntry(
+    val id: String,
+    val label: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val keywords: List<String>,
+    val value: String? = null,
+    val enabled: Boolean = true,
+)
 
 @Composable
-fun SettingsScreen(state: UiState, viewModel: MainViewModel) {
-    var confirmDisconnect by remember { mutableStateOf(false) }
-    val uriHandler = LocalUriHandler.current
-    val context = LocalContext.current
-    val latestCrash = remember { CrashReporter.latest(context) }
-    var enableAfterPermission by remember { mutableStateOf(false) }
-    val notificationPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted && enableAfterPermission) {
-            viewModel.setBackgroundSync(true)
-        } else if (!granted) {
-            viewModel.showMessage("Allow notifications to use background sync.")
-        }
-        enableAfterPermission = false
+private fun SettingsList(state: UiState, viewModel: MainViewModel) {
+    val connected = state.connected
+    val environmentCount = if (state.config != null) 1 else 0
+    val query = state.settingsSearch.trim().lowercase()
+
+    fun matches(entry: SettingsListEntry): Boolean =
+        query.isEmpty() ||
+            entry.label.lowercase().contains(query) ||
+            entry.keywords.any { it.contains(query) }
+
+    fun section(title: String?, entries: List<SettingsListEntry>): Pair<String?, List<SettingsListEntry>>? {
+        val visible = entries.filter(::matches)
+        return if (visible.isEmpty()) null else title to visible
     }
-    val toggleBackgroundSync: (Boolean) -> Unit = { enabled ->
-        if (!enabled) {
-            viewModel.setBackgroundSync(false)
-        } else if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.POST_NOTIFICATIONS,
-            ) != PackageManager.PERMISSION_GRANTED
+
+    val workspace = listOf(
+        SettingsListEntry("tab:projects", "Projects", Icons.Rounded.FolderOpen, listOf("workspaces", "repositories", "browse"), value = "${state.projects.size}"),
+        SettingsListEntry("tab:usage", "Usage", Icons.Rounded.BarChart, listOf("tokens", "cost", "activity", "spend")),
+    )
+    val connections = listOf(
+        SettingsListEntry(SettingsPages.Environments, "Environments", Icons.Rounded.Dns, listOf("server", "connection", "pair", "machine"), value = "$environmentCount"),
+        SettingsListEntry(SettingsPages.Notifications, "Notifications", Icons.Rounded.Notifications, listOf("background sync", "alerts", "push")),
+    )
+    val main = listOf(
+        SettingsListEntry(SettingsPages.General, "General", Icons.Rounded.Tune, listOf("project grouping", "working section", "new thread")),
+        SettingsListEntry(SettingsPages.Appearance, "Appearance", Icons.Rounded.Palette, listOf("theme", "font", "text size", "math", "dark")),
+        SettingsListEntry(SettingsPages.Chat, "Chat", Icons.Rounded.ChatBubble, listOf("steer", "queue", "follow-up")),
+        SettingsListEntry(SettingsPages.NavigationTabs, "Navigation tabs", Icons.Rounded.Menu, listOf("tabs", "order", "hide")),
+        SettingsListEntry(SettingsPages.Microphone, "Microphone", Icons.Rounded.Mic, listOf("voice", "input", "dictation")),
+    )
+    val agents = listOf(
+        SettingsListEntry(SettingsPages.Providers, "Providers", Icons.Rounded.SmartToy, listOf("sign in", "claude", "codex", "account"), enabled = connected),
+        SettingsListEntry(SettingsPages.Threads, "Threads", Icons.Rounded.Forum, listOf("workspace", "permissions", "streaming", "auto-settle"), enabled = connected),
+        SettingsListEntry(SettingsPages.ScheduledTasks, "Scheduled tasks", Icons.Rounded.Schedule, listOf("schedule", "recurring", "cron", "automation"), enabled = connected),
+    )
+    val code = listOf(
+        SettingsListEntry(SettingsPages.Projects, "Projects", Icons.Rounded.FolderOpen, listOf("pin", "archive", "remove", "checkout"), enabled = connected),
+        SettingsListEntry(SettingsPages.SourceControl, "Source control", Icons.Rounded.CallMerge, listOf("git", "github", "gitlab", "auto-pull", "agent credits"), enabled = connected),
+        SettingsListEntry(SettingsPages.Worktrees, "Worktrees", Icons.Rounded.Layers, listOf("branch", "submodules", "worktree"), enabled = connected),
+    )
+    val tail = listOf(
+        SettingsListEntry(SettingsPages.Maintenance, "Maintenance", Icons.Rounded.Build, listOf("update", "database", "storage", "cleanup"), enabled = connected),
+        SettingsListEntry(SettingsPages.Labs, "Labs", Icons.Rounded.Science, listOf("beta", "linked environments", "plan mode")),
+        SettingsListEntry(SettingsPages.About, "About", Icons.Rounded.Info, listOf("version", "licenses", "legal", "diagnostics")),
+        SettingsListEntry(SettingsPages.Archive, "Archive", Icons.Rounded.Archive, listOf("archived", "unarchive")),
+    )
+
+    val sections = listOfNotNull(
+        section(null, workspace),
+        section(null, connections),
+        section(null, main),
+        section("Agents", agents),
+        section("Code", code),
+        section(null, tail),
+    )
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = "Settings",
+            subtitle = state.config?.environment?.label?.ifBlank { null },
+            leading = { BackButton { viewModel.selectTab(AppTab.Threads) } },
+        )
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+            OutlinedTextField(
+                value = state.settingsSearch,
+                onValueChange = viewModel::setSettingsSearch,
+                placeholder = { Text("Search settings") },
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                singleLine = true,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (sections.isEmpty()) {
+            EmptyState(
+                icon = Icons.Rounded.Search,
+                title = "No results",
+                message = "No settings match \"${state.settingsSearch.trim()}\".",
+                actionLabel = "Clear search",
+                onAction = { viewModel.setSettingsSearch("") },
+            )
+            return@Column
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            enableAfterPermission = true
-            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            viewModel.setBackgroundSync(true)
-        }
-    }
-    val config = state.config ?: return
-    val environment = config.environment
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 36.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        item {
-            ScreenHeader(
-                title = "Settings",
-                subtitle = environment.label.ifBlank { "Connected environment" },
-                leading = {
-                    BackButton { viewModel.selectTab(AppTab.Threads) }
-                },
-            )
-        }
-
-        item {
-            GroupedCard {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    StatusDot(StatusTone.Active, pulsing = true, size = 9.dp)
-                    Spacer(Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = environment.label.ifBlank { "Connected environment" },
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        Text(
-                            text = state.baseUrl,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Pill(
-                        text = "Online",
-                        container = MaterialTheme.colorScheme.tertiaryContainer,
-                        content = MaterialTheme.colorScheme.onTertiaryContainer,
-                    )
-                }
-            }
-        }
-
-        item { SectionLabel("Workspace") }
-        item {
-            GroupedCard {
-                SettingsRow(
-                    icon = Icons.Rounded.FolderOpen,
-                    title = "Projects",
-                    subtitle = "${state.projects.size} project${if (state.projects.size == 1) "" else "s"}",
-                    onClick = { viewModel.selectTab(AppTab.Projects) },
-                )
-                InsetDivider(start = 58.dp)
-                SettingsRow(
-                    icon = Icons.Rounded.BarChart,
-                    title = "Usage",
-                    subtitle = "Tokens, cost, and model activity",
-                    onClick = { viewModel.selectTab(AppTab.Usage) },
-                )
-            }
-        }
-
-        item { SectionLabel("Connection") }
-        item {
-            GroupedCard {
-                SettingsRow(
-                    icon = Icons.Rounded.Dns,
-                    title = "Server",
-                    subtitle = state.baseUrl,
-                    monospace = true,
-                )
-                InsetDivider(start = 58.dp)
-                SettingsRow(
-                    icon = Icons.Rounded.Smartphone,
-                    title = "Environment",
-                    subtitle = environment.environmentId.ifBlank { "unknown" },
-                    monospace = true,
-                )
-                InsetDivider(start = 58.dp)
-                SettingsRow(
-                    icon = Icons.Rounded.Info,
-                    title = "Version",
-                    subtitle = "T3 ${environment.serverVersion.ifBlank { "?" }} · protocol " +
-                        environment.orchestrationProtocolVersion +
-                        " · ${environment.platform.os}/${environment.platform.arch}",
-                )
-                InsetDivider(start = 58.dp)
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(14.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = viewModel::refresh,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(16.dp),
-                    ) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(17.dp))
-                        Spacer(Modifier.width(7.dp))
-                        Text("Refresh")
-                    }
-                    OutlinedButton(
-                        onClick = { confirmDisconnect = true },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error,
-                        ),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
-                    ) {
-                        Icon(Icons.Rounded.Logout, contentDescription = null, modifier = Modifier.size(17.dp))
-                        Spacer(Modifier.width(7.dp))
-                        Text("Disconnect")
-                    }
-                }
-            }
-        }
-
-        item { SectionLabel("Notifications") }
-        item {
-            GroupedCard {
-                SettingsRow(
-                    icon = Icons.Rounded.Notifications,
-                    title = "Background sync",
-                    subtitle = if (state.backgroundSyncEnabled) {
-                        "Watching active chats and sending completion or input alerts."
-                    } else {
-                        "Keep active chats updated and notify you when they finish or need input."
-                    },
-                    trailing = {
-                        Switch(
-                            checked = state.backgroundSyncEnabled,
-                            onCheckedChange = toggleBackgroundSync,
-                        )
-                    },
-                )
-            }
-        }
-
-        item { SectionLabel("Providers · ${config.providers.size}") }
-        item {
-            GroupedCard {
-                if (config.providers.isEmpty()) {
-                    Text(
-                        text = "No providers configured on this server.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(16.dp),
-                    )
-                } else {
-                    config.providers.forEachIndexed { index, provider ->
-                        ProviderRow(provider)
-                        if (index < config.providers.lastIndex) InsetDivider(start = 16.dp)
-                    }
-                }
-            }
-        }
-
-        item { SectionLabel("Appearance") }
-        item {
-            GroupedCard {
-                SettingsRow(
-                    icon = Icons.Rounded.Palette,
-                    title = "Theme",
-                    subtitle = "Follow the system or pin light / dark.",
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    ThemePref.entries.forEach { pref ->
-                        FilterChip(
-                            selected = state.themePref == pref,
-                            onClick = { viewModel.setThemePref(pref) },
-                            label = { Text(pref.name) },
-                            shape = CircleShape,
-                        )
-                    }
-                }
-            }
-        }
-
-        item { SectionLabel("Diagnostics") }
-        item {
-            GroupedCard {
-                SettingsRow(
-                    icon = Icons.Rounded.BugReport,
-                    title = "Crash reports",
-                    subtitle = latestCrash?.let {
-                        "Open the latest log and share it with the developer"
-                    } ?: "No crash logs on this device",
-                    onClick = latestCrash?.let { file ->
-                        {
-                            CrashReporter.launchCrashScreen(
-                                context = context,
-                                file = file,
-                                replaceTask = false,
-                            )
-                        }
-                    },
-                )
-                InsetDivider(start = 58.dp)
-                SettingsRow(
-                    icon = Icons.Rounded.CheckCircle,
-                    title = "Core self-test",
-                    subtitle = "Probe shell, thread projection, and usage endpoints.",
-                    trailing = {
-                        OutlinedButton(
-                            onClick = viewModel::runSelfTest,
-                            enabled = !state.selfTestBusy,
-                            shape = RoundedCornerShape(14.dp),
-                        ) {
-                            if (state.selfTestBusy) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(15.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Rounded.PlayArrow,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                            }
-                            Spacer(Modifier.width(6.dp))
-                            Text("Run")
-                        }
-                    },
-                )
-                if (state.selfTestLog.isNotEmpty()) {
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            state.selfTestLog.forEach { line ->
-                                Text(
-                                    text = line,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+            sections.forEach { (title, entries) ->
+                if (title != null) item(key = "header-$title") { SectionLabel(title) }
+                item(key = "card-${title ?: "root"}-${entries.first().id}") {
+                    GroupedCard {
+                        entries.forEachIndexed { index, entry ->
+                            if (index > 0) InsetDivider(start = 52.dp)
+                            SettingsListRow(entry) {
+                                if (entry.enabled) {
+                                    when (entry.id) {
+                                        "tab:projects" -> viewModel.selectTab(AppTab.Projects)
+                                        "tab:usage" -> viewModel.selectTab(AppTab.Usage)
+                                        else -> viewModel.openSettingsPage(entry.id)
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
         }
-
-        item { SectionLabel("About") }
-        item {
-            GroupedCard {
-                SettingsRow(
-                    icon = Icons.Rounded.Code,
-                    title = "Go core",
-                    subtitle = "shrawan-13/t3code-core · built for arm64-v8a",
-                )
-                InsetDivider(start = 58.dp)
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "T3 Code for Android ${BuildConfig.VERSION_NAME}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        onClick = {
-                            uriHandler.openUri("https://github.com/Shrawan-13/t3code-core")
-                        },
-                    ) { Text("Core repo") }
-                }
-            }
-        }
-    }
-
-    if (confirmDisconnect) {
-        AlertDialog(
-            onDismissRequest = { confirmDisconnect = false },
-            title = { Text("Disconnect?") },
-            text = { Text("Your saved server URL and token will stay on this device.") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirmDisconnect = false
-                        viewModel.disconnect()
-                    },
-                ) { Text("Disconnect", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDisconnect = false }) { Text("Cancel") }
-            },
-        )
     }
 }
 
 @Composable
-private fun ProviderRow(provider: Provider) {
-    val tone = when {
-        provider.enabled && provider.installed -> MaterialTheme.colorScheme.primary
-        !provider.enabled -> MaterialTheme.colorScheme.outline
-        else -> MaterialTheme.colorScheme.error
-    }
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        StatusDot(tone = if (provider.installed) StatusTone.Active else StatusTone.Neutral, size = 8.dp)
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = provider.displayName.ifBlank { provider.driver.ifBlank { provider.instanceId } },
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = listOfNotNull(
-                    provider.status.takeIf { it.isNotBlank() },
-                    provider.version?.takeIf { it.isNotBlank() },
-                    "${provider.models.size} models",
-                ).joinToString(" · "),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Spacer(Modifier.width(10.dp))
-        Text(
-            text = if (provider.enabled) "on" else "off",
-            style = MaterialTheme.typography.labelSmall,
-            color = tone,
-        )
-    }
-}
-
-@Composable
-private fun SettingsRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    subtitle: String,
-    monospace: Boolean = false,
-    onClick: (() -> Unit)? = null,
-    trailing: (@Composable () -> Unit)? = null,
-) {
+private fun SettingsListRow(entry: SettingsListEntry, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .then(if (entry.enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 14.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            imageVector = icon,
+            imageVector = entry.icon,
             contentDescription = null,
             modifier = Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.primary,
+            tint = if (entry.enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
         )
         Spacer(Modifier.width(13.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(text = title, style = MaterialTheme.typography.labelLarge)
-            Spacer(Modifier.height(2.dp))
+        Text(
+            text = entry.label,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (entry.enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+            modifier = Modifier.weight(1f),
+        )
+        if (entry.value != null) {
             Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = if (monospace) FontFamily.Monospace else FontFamily.Default,
+                text = entry.value,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
+            Spacer(Modifier.width(6.dp))
         }
-        if (trailing != null) {
-            Spacer(Modifier.width(10.dp))
-            trailing()
-        }
+        Icon(
+            imageVector = Icons.Rounded.ArrowForwardIos,
+            contentDescription = null,
+            modifier = Modifier.size(12.dp),
+            tint = MaterialTheme.colorScheme.outline,
+        )
     }
 }

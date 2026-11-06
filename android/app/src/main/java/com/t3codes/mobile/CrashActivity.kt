@@ -1,6 +1,5 @@
 package com.t3codes.mobile
 
-import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -73,7 +72,12 @@ class CrashActivity : ComponentActivity() {
             ?: pending
 
         setContent {
-            T3Theme(themePref = themePreference()) {
+            T3Theme(
+                themeMode = AppSettings.themeMode(this),
+                lightThemeId = AppSettings.lightThemeId(this),
+                darkThemeId = AppSettings.darkThemeId(this),
+                baseFontSize = AppSettings.baseFontSize(this),
+            ) {
                 CrashScreen(
                     file = file,
                     onShare = { file?.let { CrashReporter.share(this, it) } },
@@ -98,14 +102,6 @@ class CrashActivity : ComponentActivity() {
         finishAndRemoveTask()
     }
 
-    private fun themePreference(): ThemePref {
-        val prefs = getSharedPreferences("t3_connection", Context.MODE_PRIVATE)
-        return runCatching {
-            ThemePref.valueOf(
-                prefs.getString("theme_pref", ThemePref.System.name) ?: ThemePref.System.name,
-            )
-        }.getOrDefault(ThemePref.System)
-    }
 }
 
 @Composable

@@ -31,7 +31,10 @@ import com.t3codes.core.PullRequestListResult
 import com.t3codes.core.PullRequestProjectError
 import com.t3codes.core.PullRequestProviderSummary
 import com.t3codes.core.RuntimeRequest
+import com.t3codes.core.ScheduledTask
+import com.t3codes.core.ScheduledTaskList
 import com.t3codes.core.ServerConfig
+import com.t3codes.core.ServerNpmRelease
 import com.t3codes.core.ShellFeed
 import com.t3codes.core.ShellSnapshot
 import com.t3codes.core.SourceControlCloneResult
@@ -61,6 +64,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -75,14 +79,17 @@ import java.time.ZoneId
 import java.util.UUID
 
 enum class AppTab(val label: String) {
-    Threads("Chats"),
+    Threads("Threads"),
     PullRequests("Pull requests"),
     Projects("Projects"),
     Usage("Usage"),
     Settings("Settings"),
 }
 
-val bottomTabs = listOf(AppTab.Threads, AppTab.PullRequests)
+private val NAVIGABLE_TABS = listOf("threads", "pullRequests", "usage")
+
+private fun resolveNavTabOrder(saved: List<String>): List<String> =
+    (saved.filter { it in NAVIGABLE_TABS } + NAVIGABLE_TABS).distinct()
 
 enum class ConnectionStatus {
     Connecting,
@@ -216,10 +223,38 @@ data class UiState(
     val terminal: TerminalUi? = null,
     val diff: DiffUi? = null,
     val files: FilesUi? = null,
-    val themePref: ThemePref = ThemePref.System,
+    val themeMode: String = "system",
+    val lightThemeId: String = "t3-code",
+    val darkThemeId: String = "t3-code",
+    val baseFontSize: Int = AppSettings.DEFAULT_BASE_FONT_SIZE,
+    val terminalFontSize: Float? = null,
+    val codeFontSize: Int? = null,
+    val codeWordBreak: Boolean = false,
+    val mathRenderingEnabled: Boolean = false,
+    val androidNavStyle: String = "material",
+    val workingShelfEnabled: Boolean = true,
+    val followUpBehavior: String = "steer",
+    val projectGroupingMode: String = "repository",
+    val useLastProjectForNewThreads: Boolean = true,
+    val planModeLegacyEnabled: Boolean = false,
+    val serverSettings: JsonObject? = null,
+    val serverSettingsLoading: Boolean = false,
+    val serverSettingsWriting: Boolean = false,
+    val serverScopeProjectId: String? = null,
+    val navTabOrder: List<String> = listOf("threads", "pullRequests", "usage"),
+    val navHiddenTabs: List<String> = emptyList(),
+    val microphoneOrder: List<String> = emptyList(),
+    val settingsPage: String? = null,
+    val settingsSearch: String = "",
     val selfTestBusy: Boolean = false,
     val selfTestLog: List<String> = emptyList(),
     val backgroundSyncEnabled: Boolean = false,
+    val scheduledTasks: List<ScheduledTask> = emptyList(),
+    val scheduledTasksLoading: Boolean = false,
+    val maintenanceBusy: Boolean = false,
+    val maintenanceMessage: String? = null,
+    val serverUpdate: ServerNpmRelease? = null,
+    val storageReport: JsonObject? = null,
 ) {
     val connected: Boolean get() = config != null
 
@@ -269,9 +304,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         UiState(
             baseUrl = prefs.getString(KEY_BASE, "http://127.0.0.1:3773") ?: "http://127.0.0.1:3773",
             token = prefs.getString(KEY_TOKEN, "") ?: "",
-            themePref = runCatching {
-                ThemePref.valueOf(prefs.getString(KEY_THEME, ThemePref.System.name) ?: ThemePref.System.name)
-            }.getOrDefault(ThemePref.System),
+            themeMode = AppSettings.themeMode(application),
+            navTabOrder = resolveNavTabOrder(AppSettings.navigationTabOrder(application)),
+            navHiddenTabs = AppSettings.hiddenNavigationTabs(application).filter { it in NAVIGABLE_TABS },
+            microphoneOrder = AppSettings.microphoneOrder(application).filter { it in setOf("wired", "bluetooth", "builtIn") },
+            lightThemeId = AppSettings.lightThemeId(application),
+            darkThemeId = AppSettings.darkThemeId(application),
+            baseFontSize = AppSettings.baseFontSize(application),
+            terminalFontSize = AppSettings.terminalFontSize(application),
+            codeFontSize = AppSettings.codeFontSize(application),
+            codeWordBreak = AppSettings.codeWordBreak(application),
+            mathRenderingEnabled = AppSettings.mathRenderingEnabled(application),
+            androidNavStyle = AppSettings.androidNavStyle(application),
+            workingShelfEnabled = AppSettings.workingShelfEnabled(application),
+            followUpBehavior = AppSettings.followUpBehavior(application),
+            projectGroupingMode = AppSettings.projectGroupingMode(application),
+            useLastProjectForNewThreads = AppSettings.useLastProjectForNewThreads(application),
+            planModeLegacyEnabled = AppSettings.planModeLegacyEnabled(application),
             backgroundSyncEnabled = prefs.getBoolean(AppPreferences.BACKGROUND_SYNC, false),
         ),
     )
@@ -385,6 +434,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 connection = result.first
                 reconnectAttempts = 0
+                loadServerSettings(result.first)
                 prefs.edit()
                     .putString(KEY_BASE, base)
                     .putString(KEY_TOKEN, token)
@@ -1224,9 +1274,428 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         state = state.copy(showArchived = !state.showArchived)
     }
 
-    fun setThemePref(pref: ThemePref) {
-        prefs.edit().putString(KEY_THEME, pref.name).apply()
-        state = state.copy(themePref = pref)
+    fun setThemeMode(mode: String) {
+        AppSettings.setThemeMode(getApplication(), mode)
+        state = state.copy(themeMode = mode)
+    }
+
+    fun setThemeId(appearance: String, id: String) {
+        AppSettings.setThemeId(getApplication(), appearance, id)
+        state = if (appearance == "light") state.copy(lightThemeId = id) else state.copy(darkThemeId = id)
+    }
+
+    fun setThemeIdBoth(id: String) {
+        AppSettings.setThemeIdBoth(getApplication(), id)
+        state = state.copy(lightThemeId = id, darkThemeId = id)
+    }
+
+    fun setAndroidNavStyle(style: String) {
+        AppSettings.setAndroidNavStyle(getApplication(), style)
+        state = state.copy(androidNavStyle = style)
+    }
+
+    fun setBaseFontSize(value: Int) {
+        AppSettings.setBaseFontSize(getApplication(), value)
+        state = state.copy(baseFontSize = value.coerceIn(AppSettings.MIN_BASE_FONT_SIZE, AppSettings.MAX_BASE_FONT_SIZE))
+    }
+
+    fun setTerminalFontSize(value: Float?) {
+        AppSettings.setTerminalFontSize(getApplication(), value)
+        state = state.copy(terminalFontSize = value)
+    }
+
+    fun setCodeFontSize(value: Int?) {
+        AppSettings.setCodeFontSize(getApplication(), value)
+        state = state.copy(codeFontSize = value)
+    }
+
+    fun setCodeWordBreak(value: Boolean) {
+        AppSettings.setCodeWordBreak(getApplication(), value)
+        state = state.copy(codeWordBreak = value)
+    }
+
+    fun setMathRenderingEnabled(value: Boolean) {
+        AppSettings.setMathRenderingEnabled(getApplication(), value)
+        state = state.copy(mathRenderingEnabled = value)
+    }
+
+    fun setWorkingShelfEnabled(value: Boolean) {
+        AppSettings.setWorkingShelfEnabled(getApplication(), value)
+        state = state.copy(workingShelfEnabled = value)
+    }
+
+    fun setFollowUpBehavior(value: String) {
+        AppSettings.setFollowUpBehavior(getApplication(), value)
+        state = state.copy(followUpBehavior = value)
+    }
+
+    fun setProjectGroupingMode(value: String) {
+        AppSettings.setProjectGroupingMode(getApplication(), value)
+        state = state.copy(projectGroupingMode = value)
+    }
+
+    fun setUseLastProjectForNewThreads(value: Boolean) {
+        AppSettings.setUseLastProjectForNewThreads(getApplication(), value)
+        state = state.copy(useLastProjectForNewThreads = value)
+    }
+
+    fun setPlanModeLegacyEnabled(value: Boolean) {
+        AppSettings.setPlanModeLegacyEnabled(getApplication(), value)
+        state = state.copy(planModeLegacyEnabled = value)
+    }
+
+    // ---------------------------------------------------------------- project mutations
+
+    private fun mutateProject(payload: kotlinx.serialization.json.JsonObject) {
+        val conn = connection ?: run {
+            showMessage("Reconnect to change projects.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { conn.callRaw("projects.mutate", payload) }
+            withContext(Dispatchers.Main) {
+                result
+                    .onFailure { showMessage(describe(it)) }
+                    .onSuccess { refresh() }
+            }
+        }
+    }
+
+    fun renameProject(projectId: String, title: String) {
+        val trimmed = title.trim()
+        if (trimmed.isEmpty()) return
+        mutateProject(buildJsonObject {
+            put("type", "project.update")
+            put("commandId", java.util.UUID.randomUUID().toString())
+            put("projectId", projectId)
+            put("title", trimmed)
+        })
+    }
+
+    fun setProjectPinned(projectId: String, pinned: Boolean) {
+        mutateProject(buildJsonObject {
+            put("type", "project.update")
+            put("commandId", java.util.UUID.randomUUID().toString())
+            put("projectId", projectId)
+            put("pinned", pinned)
+        })
+    }
+
+    fun setProjectArchived(projectId: String, archived: Boolean) {
+        mutateProject(buildJsonObject {
+            put("type", "project.update")
+            put("commandId", java.util.UUID.randomUUID().toString())
+            put("projectId", projectId)
+            put("archived", archived)
+        })
+    }
+
+    fun removeProject(projectId: String) {
+        mutateProject(buildJsonObject {
+            put("type", "project.delete")
+            put("commandId", java.util.UUID.randomUUID().toString())
+            put("projectId", projectId)
+            put("force", true)
+        })
+    }
+
+    // ---------------------------------------------------------------- settings navigation
+
+    fun openSettingsPage(page: String) {
+        state = state.copy(settingsPage = page)
+    }
+
+    fun closeSettingsPage() {
+        state = state.copy(settingsPage = null, settingsSearch = "")
+    }
+
+    fun setSettingsSearch(query: String) {
+        state = state.copy(settingsSearch = query)
+    }
+
+    fun navTabVisible(): List<String> = state.navTabOrder.filterNot { it in state.navHiddenTabs }
+
+    fun toggleNavTabHidden(tab: String) {
+        if (tab !in NAVIGABLE_TABS) return
+        val hidden = state.navHiddenTabs.toMutableList()
+        if (tab in hidden) {
+            hidden.remove(tab)
+        } else {
+            val visibleCount = navTabVisible().size
+            if (visibleCount <= 1) {
+                showMessage("Keep at least one tab visible.")
+                return
+            }
+            hidden.add(tab)
+        }
+        AppSettings.setHiddenNavigationTabs(getApplication(), hidden)
+        state = state.copy(navHiddenTabs = hidden)
+        // Leaving the current tab hidden would strand the user on an invisible tab.
+        if (tab == tabForAppTab(state.tab)) selectTab(AppTab.Threads)
+    }
+
+    fun moveNavTab(tab: String, direction: Int) {
+        if (tab !in NAVIGABLE_TABS || direction == 0) return
+        val order = state.navTabOrder.toMutableList()
+        val index = order.indexOf(tab)
+        if (index < 0) return
+        val target = (index + direction).coerceIn(0, order.size - 1)
+        if (target == index) return
+        order.removeAt(index)
+        order.add(target, tab)
+        AppSettings.setNavigationTabOrder(getApplication(), order)
+        state = state.copy(navTabOrder = order)
+    }
+
+    fun moveMicrophone(kind: String, direction: Int) {
+        val base = state.microphoneOrder.ifEmpty { listOf("wired", "bluetooth", "builtIn") }
+        if (kind !in base || direction == 0) return
+        val order = base.toMutableList()
+        val index = order.indexOf(kind)
+        val target = (index + direction).coerceIn(0, order.size - 1)
+        if (target == index) return
+        order.removeAt(index)
+        order.add(target, kind)
+        AppSettings.setMicrophoneOrder(getApplication(), order)
+        state = state.copy(microphoneOrder = order)
+    }
+
+    fun resetNavTabs() {
+        AppSettings.resetNavigationTabs(getApplication())
+        state = state.copy(navTabOrder = resolveNavTabOrder(emptyList()), navHiddenTabs = emptyList())
+    }
+
+    private fun tabForAppTab(tab: AppTab): String = when (tab) {
+        AppTab.Threads -> "threads"
+        AppTab.PullRequests -> "pullRequests"
+        AppTab.Usage -> "usage"
+        else -> "threads"
+    }
+
+    // ---------------------------------------------------------------- server settings
+
+    private fun loadServerSettings(conn: com.t3codes.core.T3Connection) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { conn.getSettings() }
+            withContext(Dispatchers.Main) {
+                result.onSuccess { state = state.copy(serverSettings = it, serverSettingsLoading = false) }
+                    .onFailure { state = state.copy(serverSettingsLoading = false) }
+            }
+        }
+    }
+
+    /** Re-read server settings (used after external changes such as provider refreshes). */
+    fun refreshServerSettings() {
+        val conn = connection ?: return
+        loadServerSettings(conn)
+    }
+
+    /** Scope selector on server-scoped settings pages: null = All projects. */
+    fun setServerScope(projectId: String?) {
+        state = state.copy(serverScopeProjectId = projectId)
+    }
+
+    /**
+     * Write one server setting. Machine scope when [projectId] is null, otherwise the value is
+     * merged into that project's overrides (null clears the override, or stores an explicit null
+     * for nullable keys).
+     */
+    fun writeServerSetting(key: String, value: JsonElement?, projectId: String?) {
+        val conn = connection ?: run {
+            showMessage("Reconnect to change server settings.")
+            return
+        }
+        if (state.serverSettingsWriting) return
+        state = state.copy(serverSettingsWriting = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                val store = ServerSettingsStore(conn)
+                if (projectId == null) store.setMachine(key, value)
+                else store.setProjectOverride(projectId, key, value)
+            }
+            withContext(Dispatchers.Main) {
+                state = state.copy(serverSettingsWriting = false)
+                result
+                    .onSuccess { state = state.copy(serverSettings = it) }
+                    .onFailure { showMessage(describe(it)) }
+            }
+        }
+    }
+
+    /** Remove the given override keys for a project (project-scoped pages expose this). */
+    fun clearProjectOverrides(projectId: String, keys: List<String>) {
+        val conn = connection ?: return
+        if (state.serverSettingsWriting) return
+        state = state.copy(serverSettingsWriting = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { ServerSettingsStore(conn).clearProjectOverrides(projectId, keys) }
+            withContext(Dispatchers.Main) {
+                state = state.copy(serverSettingsWriting = false)
+                result
+                    .onSuccess { state = state.copy(serverSettings = it) }
+                    .onFailure { showMessage(describe(it)) }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- scheduled tasks & maintenance
+
+    fun refreshScheduledTasks() {
+        val conn = connection ?: return
+        if (state.scheduledTasksLoading) return
+        state = state.copy(scheduledTasksLoading = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { conn.call<ScheduledTaskList>("scheduledTasks.list") }
+            withContext(Dispatchers.Main) {
+                state = state.copy(scheduledTasksLoading = false)
+                result
+                    .onSuccess { state = state.copy(scheduledTasks = it.tasks) }
+                    .onFailure { showMessage(describe(it)) }
+            }
+        }
+    }
+
+    fun setScheduledTaskEnabled(taskId: String, enabled: Boolean) {
+        val conn = connection ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                conn.callRaw(
+                    "scheduledTasks.setEnabled",
+                    buildJsonObject {
+                        put("id", taskId)
+                        put("enabled", enabled)
+                    },
+                )
+            }
+            withContext(Dispatchers.Main) {
+                result.onFailure { showMessage(describe(it)) }
+                refreshScheduledTasks()
+            }
+        }
+    }
+
+    fun runScheduledTaskNow(taskId: String) {
+        val conn = connection ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                conn.callRaw("scheduledTasks.runNow", buildJsonObject { put("id", taskId) })
+            }
+            withContext(Dispatchers.Main) {
+                result
+                    .onFailure { showMessage(describe(it)) }
+                    .onSuccess { toast("Task started") }
+            }
+        }
+    }
+
+    fun deleteScheduledTask(taskId: String) {
+        val conn = connection ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                conn.callRaw("scheduledTasks.delete", buildJsonObject { put("id", taskId) })
+            }
+            withContext(Dispatchers.Main) {
+                result
+                    .onFailure { showMessage(describe(it)) }
+                    .onSuccess { toast("Task deleted") }
+                refreshScheduledTasks()
+            }
+        }
+    }
+
+    fun checkServerUpdate() {
+        val conn = connection ?: return
+        if (state.maintenanceBusy) return
+        state = state.copy(maintenanceBusy = true, maintenanceMessage = null)
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                conn.call<ServerNpmRelease?>(
+                    "server.getNpmRelease",
+                    buildJsonObject { put("spec", "latest") },
+                )
+            }
+            withContext(Dispatchers.Main) {
+                state = state.copy(maintenanceBusy = false)
+                result
+                    .onSuccess { release ->
+                        if (release == null) {
+                            state = state.copy(
+                                serverUpdate = null,
+                                maintenanceMessage = "No release found.",
+                            )
+                        } else {
+                            val current = state.config?.environment?.serverVersion.orEmpty()
+                            val message = when {
+                                release.version.isBlank() -> "No release found."
+                                release.version == current -> "Server is up to date."
+                                else -> "Version ${release.version} is available."
+                            }
+                            state = state.copy(serverUpdate = release, maintenanceMessage = message)
+                        }
+                    }
+                    .onFailure { state = state.copy(maintenanceMessage = describe(it)) }
+            }
+        }
+    }
+
+    fun installServerUpdate(version: String) {
+        val conn = connection ?: return
+        if (state.maintenanceBusy) return
+        state = state.copy(maintenanceBusy = true, maintenanceMessage = "Installing $version…")
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                conn.updateServer(buildJsonObject { put("targetVersion", version) })
+            }
+            withContext(Dispatchers.Main) {
+                state = state.copy(maintenanceBusy = false)
+                result
+                    .onSuccess {
+                        toast("Update requested")
+                        state = state.copy(maintenanceMessage = "Update requested. The server will restart.")
+                    }
+                    .onFailure { state = state.copy(maintenanceMessage = describe(it)) }
+            }
+        }
+    }
+
+    fun loadStorageReport() {
+        val conn = connection ?: return
+        if (state.maintenanceBusy) return
+        state = state.copy(maintenanceBusy = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { conn.getStorageCleanupReport() }
+            withContext(Dispatchers.Main) {
+                state = state.copy(maintenanceBusy = false)
+                result
+                    .onSuccess { state = state.copy(storageReport = it) }
+                    .onFailure { showMessage(describe(it)) }
+            }
+        }
+    }
+
+    fun runStorageCleanup(dryRun: Boolean) {
+        val conn = connection ?: return
+        if (state.maintenanceBusy) return
+        state = state.copy(maintenanceBusy = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { conn.runStorageCleanup(dryRun) }
+            withContext(Dispatchers.Main) {
+                state = state.copy(maintenanceBusy = false)
+                result
+                    .onSuccess {
+                        toast(if (dryRun) "Preview complete" else "Cleanup complete")
+                        loadStorageReport()
+                    }
+                    .onFailure { showMessage(describe(it)) }
+            }
+        }
+    }
+
+    fun clearClientCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { clientCache.clearAll() }
+            withContext(Dispatchers.Main) { toast("Client cache cleared") }
+        }
     }
 
     // -------------------------------------------------------------------- threads
@@ -2962,7 +3431,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val LOG_TAG = "T3Live"
         const val KEY_BASE = "base_url"
         const val KEY_TOKEN = "token"
-        const val KEY_THEME = "theme_pref"
         const val KEY_AUTO = "auto_connect"
         const val MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
         const val MAX_TERMINAL_CHARS = 300_000
