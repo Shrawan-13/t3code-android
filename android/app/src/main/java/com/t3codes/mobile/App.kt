@@ -1,12 +1,19 @@
 package com.t3codes.mobile
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BarChart
@@ -23,6 +30,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -30,6 +38,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -147,6 +157,84 @@ fun T3App(viewModel: MainViewModel) {
 }
 
 @Composable
+private fun OneUiNavBar(
+    tabs: List<AppTab>,
+    selected: AppTab,
+    onSelect: (AppTab) -> Unit,
+    onCompose: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(26.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+            ),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                tabs.forEach { tab ->
+                    val active = tab == selected
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(20.dp))
+                            .clickable { onSelect(tab) }
+                            .padding(vertical = 7.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Icon(
+                            imageVector = navTabIcon(tab),
+                            contentDescription = tab.label,
+                            modifier = Modifier.size(20.dp),
+                            tint = if (active) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                        Text(
+                            text = tab.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (active) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+        FloatingActionButton(
+            onClick = onCompose,
+            shape = CircleShape,
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+        ) {
+            Icon(Icons.Rounded.Add, contentDescription = "New thread")
+        }
+    }
+}
+
+@Composable
 private fun HomeScaffold(state: UiState, viewModel: MainViewModel) {
     val bottomTabs = remember(state.navTabOrder, state.navHiddenTabs) {
         visibleNavTabs(state.navTabOrder, state.navHiddenTabs)
@@ -156,29 +244,38 @@ private fun HomeScaffold(state: UiState, viewModel: MainViewModel) {
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             if (state.tab in bottomTabs) {
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                    tonalElevation = 0.dp,
-                ) {
-                    bottomTabs.forEach { tab ->
-                        NavigationBarItem(
-                            selected = state.tab == tab,
-                            onClick = { viewModel.selectTab(tab) },
-                            icon = {
-                                Icon(
-                                    imageVector = navTabIcon(tab),
-                                    contentDescription = tab.label,
-                                )
-                            },
-                            label = { Text(tab.label) },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            ),
-                        )
+                if (state.androidNavStyle == "one-ui") {
+                    OneUiNavBar(
+                        tabs = bottomTabs,
+                        selected = state.tab,
+                        onSelect = viewModel::selectTab,
+                        onCompose = { viewModel.openNewThread() },
+                    )
+                } else {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        tonalElevation = 0.dp,
+                    ) {
+                        bottomTabs.forEach { tab ->
+                            NavigationBarItem(
+                                selected = state.tab == tab,
+                                onClick = { viewModel.selectTab(tab) },
+                                icon = {
+                                    Icon(
+                                        imageVector = navTabIcon(tab),
+                                        contentDescription = tab.label,
+                                    )
+                                },
+                                label = { Text(tab.label) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
+                            )
+                        }
                     }
                 }
             }
@@ -197,18 +294,20 @@ private fun HomeScaffold(state: UiState, viewModel: MainViewModel) {
                     ) {
                         Icon(Icons.Rounded.FilterList, contentDescription = "Filter chats")
                     }
-                    ExtendedFloatingActionButton(
-                        onClick = { viewModel.openNewThread() },
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                        icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                        text = {
-                            Text(
-                                "New thread",
-                                style = MaterialTheme.typography.labelLarge,
-                            )
-                        },
-                    )
+                    if (state.androidNavStyle != "one-ui") {
+                        ExtendedFloatingActionButton(
+                            onClick = { viewModel.openNewThread() },
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
+                            text = {
+                                Text(
+                                    "New thread",
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                            },
+                        )
+                    }
                 }
             }
         },
