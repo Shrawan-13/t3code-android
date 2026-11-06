@@ -82,7 +82,7 @@ fun SettingsMaintenanceScreen(state: UiState, viewModel: MainViewModel) {
                     }
                     if (update != null && update.version.isNotBlank() && update.version != currentVersion) {
                         OutlinedButton(
-                            onClick = { viewModel.installServerUpdate(update.version) },
+                            onClick = { viewModel.installServerUpdate(update.version, update.databaseMigration) },
                             enabled = !state.maintenanceBusy,
                             modifier = Modifier.weight(1f),
                         ) { Text("Install ${update.version}") }

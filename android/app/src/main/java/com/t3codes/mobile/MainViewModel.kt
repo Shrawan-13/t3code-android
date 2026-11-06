@@ -1638,13 +1638,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun installServerUpdate(version: String) {
+    fun installServerUpdate(version: String, databaseMigration: Int? = null) {
         val conn = connection ?: return
         if (state.maintenanceBusy) return
         state = state.copy(maintenanceBusy = true, maintenanceMessage = "Installing $version…")
         viewModelScope.launch(Dispatchers.IO) {
             val result = runCatching {
-                conn.updateServer(buildJsonObject { put("targetVersion", version) })
+                conn.updateServer(
+                    buildJsonObject {
+                        put("targetVersion", version)
+                        if (databaseMigration != null) put("targetDatabaseMigration", databaseMigration)
+                    },
+                )
             }
             withContext(Dispatchers.Main) {
                 state = state.copy(maintenanceBusy = false)
