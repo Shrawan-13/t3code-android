@@ -3041,6 +3041,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         initialText: String,
         workspaceType: String = "root",
         baseRef: String = "",
+        runtimeMode: String = "full-access",
     ) {
         if (state.launching) return
         val conn = connection ?: return
@@ -3066,6 +3067,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         modelSelection = selection,
                         workspace = workspace,
                         initialText = initialText.trim().ifEmpty { null },
+                        runtimeMode = runtimeMode,
                     )
                 }
                 state = state.copy(launching = false, newThreadOpen = false)

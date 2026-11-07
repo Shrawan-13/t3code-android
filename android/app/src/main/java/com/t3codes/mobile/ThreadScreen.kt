@@ -628,6 +628,10 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                     )
                 },
                 onDismiss = { modelPickerOpen = false },
+                runtimeMode = runtimeMode,
+                onSelectRuntime = { mode ->
+                    viewModel.threadAction(thread.threadId, "setRuntimeMode", mode)
+                },
             )
         }
     }

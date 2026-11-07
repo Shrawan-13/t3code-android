@@ -35,14 +35,17 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.t3codes.core.ModelSelection
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
     val choices = remember(state.config) { state.config?.modelChoices().orEmpty() }
@@ -69,6 +73,7 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
     }
     var message by remember { mutableStateOf("") }
     var modelKey by remember { mutableStateOf("") }
+    var runtimeMode by remember { mutableStateOf("full-access") }
     var workspaceType by remember { mutableStateOf("root") }
     var projectMenuOpen by remember { mutableStateOf(false) }
     var modelMenuOpen by remember { mutableStateOf(false) }
@@ -544,65 +549,6 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                                     )
                                 }
                             }
-                            DropdownMenu(
-                                expanded = modelMenuOpen,
-                                onDismissRequest = { modelMenuOpen = false },
-                            ) {
-                                if (state.modelsRefreshing) {
-                                    DropdownMenuItem(
-                                        text = { Text("Loading models…") },
-                                        leadingIcon = {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(15.dp),
-                                                strokeWidth = 1.8.dp,
-                                            )
-                                        },
-                                        onClick = {},
-                                        enabled = false,
-                                    )
-                                }
-                                if (choices.isEmpty() && !state.modelsRefreshing) {
-                                    DropdownMenuItem(
-                                        text = { Text("Refresh models") },
-                                        leadingIcon = {
-                                            Icon(Icons.Rounded.Refresh, contentDescription = null)
-                                        },
-                                        onClick = { viewModel.ensureModelsLoaded(force = true) },
-                                    )
-                                }
-                                choices.forEach { choice ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Column {
-                                                Text(
-                                                    text = choice.model.label,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                )
-                                                Text(
-                                                    text = choice.providerName,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                )
-                                            }
-                                        },
-                                        trailingIcon = {
-                                            if (choice.key == modelKey) {
-                                                Icon(
-                                                    Icons.Rounded.Check,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(18.dp),
-                                                    tint = MaterialTheme.colorScheme.primary,
-                                                )
-                                            }
-                                        },
-                                        onClick = {
-                                            modelKey = choice.key
-                                            modelMenuOpen = false
-                                        },
-                                    )
-                                }
-                            }
                         }
                         Spacer(Modifier.weight(1f))
                         Surface(
@@ -618,6 +564,7 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                                     initialText = message,
                                     workspaceType = workspaceType,
                                     baseRef = if (workspaceType == "worktree") state.newThreadBranch else "",
+                                    runtimeMode = runtimeMode,
                                 )
                             },
                             enabled = canStart,
@@ -652,6 +599,26 @@ fun NewThreadScreen(state: UiState, viewModel: MainViewModel) {
                         }
                     }
                 }
+            }
+        }
+        if (modelMenuOpen) {
+            ModalBottomSheet(
+                onDismissRequest = { modelMenuOpen = false },
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            ) {
+                ModelPickerSheet(
+                    config = state.config,
+                    currentSelection = selectedModel?.let { choice ->
+                        ModelSelection(instanceId = choice.instanceId, model = choice.model.key)
+                    },
+                    modelsRefreshing = state.modelsRefreshing,
+                    runtimeMode = runtimeMode,
+                    onSelectRuntime = { runtimeMode = it },
+                    onRefresh = { viewModel.ensureModelsLoaded(force = true) },
+                    onSelect = { choice -> modelKey = choice.key },
+                    onDismiss = { modelMenuOpen = false },
+                )
             }
         }
     }
