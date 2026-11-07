@@ -50,11 +50,6 @@ import androidx.compose.ui.unit.sp
 import com.t3codes.core.DiffPreviewSource
 import com.t3codes.core.DiffFileStat
 
-private val AdditionText = Color(0xFF4FB585)
-private val DeletionText = Color(0xFFE06C75)
-private val AdditionBackground = Color(0x1F4FB585)
-private val DeletionBackground = Color(0x1FE06C75)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiffScreen(state: UiState, viewModel: MainViewModel) {
@@ -237,11 +232,20 @@ private fun FileStatChip(file: DiffFileStat) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.widthIn(max = 140.dp),
             )
+            val diffColors = LocalT3Colors.current
             if (file.additions > 0) {
-                Text("+${file.additions}", style = MaterialTheme.typography.labelSmall, color = AdditionText)
+                Text(
+                    "+${file.additions}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = diffColors.diffAddition,
+                )
             }
             if (file.deletions > 0) {
-                Text("−${file.deletions}", style = MaterialTheme.typography.labelSmall, color = DeletionText)
+                Text(
+                    "−${file.deletions}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = diffColors.diffDeletion,
+                )
             }
         }
     }
@@ -249,20 +253,23 @@ private fun FileStatChip(file: DiffFileStat) {
 
 @Composable
 private fun DiffLine(line: String, horizontal: androidx.compose.foundation.ScrollState) {
+    val diffColors = LocalT3Colors.current
+    val additionBackground = diffColors.diffAddition.copy(alpha = 0.12f)
+    val deletionBackground = diffColors.diffDeletion.copy(alpha = 0.12f)
     val background = when {
         line.startsWith("diff --git") || line.startsWith("index ") -> MaterialTheme.colorScheme.surfaceContainerLow
         line.startsWith("+++") || line.startsWith("---") -> MaterialTheme.colorScheme.surfaceContainerLow
-        line.startsWith("@@") -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
-        line.startsWith("+") -> AdditionBackground
-        line.startsWith("-") -> DeletionBackground
+        line.startsWith("@@") -> MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+        line.startsWith("+") -> additionBackground
+        line.startsWith("-") -> deletionBackground
         else -> Color.Transparent
     }
     val textColor = when {
         line.startsWith("diff --git") || line.startsWith("index ") -> MaterialTheme.colorScheme.onSurfaceVariant
         line.startsWith("+++") || line.startsWith("---") -> MaterialTheme.colorScheme.onSurfaceVariant
-        line.startsWith("@@") -> MaterialTheme.colorScheme.secondary
-        line.startsWith("+") -> AdditionText
-        line.startsWith("-") -> DeletionText
+        line.startsWith("@@") -> MaterialTheme.colorScheme.primary
+        line.startsWith("+") -> diffColors.diffAddition
+        line.startsWith("-") -> diffColors.diffDeletion
         else -> MaterialTheme.colorScheme.onSurface
     }
     Row(

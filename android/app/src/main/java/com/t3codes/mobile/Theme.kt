@@ -3,15 +3,19 @@ package com.t3codes.mobile
 import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
@@ -35,6 +39,9 @@ data class T3Colors(
     val drawerMuted: Color,
     val drawerControl: Color,
     val drawerBorder: Color,
+    val groupedCard: Color,
+    val diffAddition: Color,
+    val diffDeletion: Color,
     val searchMatchBackground: Color,
     val searchMatchForeground: Color,
     val warningSurface: Color,
@@ -58,6 +65,9 @@ val LocalT3Colors = staticCompositionLocalOf {
         drawerMuted = Color(0xFF71717B),
         drawerControl = Color(0xFFF4F4F5),
         drawerBorder = Color(0xFFE4E4E7),
+        groupedCard = Color(0xFFF4F4F5),
+        diffAddition = Color(0xFF1B7D50),
+        diffDeletion = Color(0xFFC10007),
         searchMatchBackground = Color(0xFFFFDE8B),
         searchMatchForeground = Color(0xFF21180A),
         warningSurface = Color(0xFFFFF3D6),
@@ -67,23 +77,39 @@ val LocalT3Colors = staticCompositionLocalOf {
     )
 }
 
-private fun sharedSchemeArgs(palette: ThemePalette) = object {
+/**
+ * Grouped-list card color, matching the official mobile theme variables:
+ * t3-code uses the toolbar hover / sidebar active tone, t3-chat uses its
+ * toolbar control / surface tone, and the remaining themes use `muted`.
+ */
+private fun groupedCardColor(palette: ThemePalette, themeId: String, dark: Boolean): Color =
+    when (themeId) {
+        "t3-code" -> if (dark) palette.sidebarRowActive else palette.toolbarControlHover
+        "t3-chat" -> if (dark) palette.surface else palette.toolbarControl
+        else -> palette.muted
+    }
+
+private fun sharedSchemeArgs(palette: ThemePalette, groupedCard: Color) = object {
     val primary = palette.accent
     val onPrimary = palette.accentForeground
     val primaryContainer = palette.accentSurface
     val onPrimaryContainer = palette.accentSurfaceForeground
     val secondary = palette.secondary
     val onSecondary = palette.secondaryForeground
-    val secondaryContainer = palette.muted
-    val onSecondaryContainer = palette.mutedForeground
+    val secondaryContainer = palette.secondary
+    val onSecondaryContainer = palette.secondaryForeground
     val tertiary = palette.update
-    val onTertiary = palette.updateForeground
+    // `updateForeground` is a tint of the update hue, so it can vanish on the
+    // update surface itself (blue on blue). Use the accent foreground instead.
+    val onTertiary = palette.accentForeground
     val tertiaryContainer = palette.updateSurface
     val onTertiaryContainer = palette.updateForeground
-    val error = palette.error
-    val onError = palette.errorForeground
+    // Destructive text and icons need the darker `errorForeground` tone to stay
+    // readable on light cards; `error` itself is the pale container accent.
+    val error = palette.errorForeground
+    val onError = palette.canvas
     val errorContainer = palette.errorSurface
-    val onErrorContainer = palette.error
+    val onErrorContainer = palette.errorForeground
     val background = palette.canvas
     val onBackground = palette.text
     val surface = palette.surface
@@ -91,13 +117,18 @@ private fun sharedSchemeArgs(palette: ThemePalette) = object {
     val surfaceVariant = palette.muted
     val onSurfaceVariant = palette.mutedForeground
     val surfaceContainerLowest = palette.canvas
-    val surfaceContainerLow = palette.surfaceRaised
-    val surfaceContainer = palette.surfaceRaised
-    val surfaceContainerHigh = palette.surfaceOverlay
+    // Grouped cards, sheets and the composer use the official grouped tone so
+    // they stay distinct from the canvas in every theme.
+    val surfaceContainerLow = groupedCard
+    val surfaceContainer = palette.surface
+    // Chips and pills sit on grouped cards, so they use the plain card tone.
+    val surfaceContainerHigh = palette.surface
     val surfaceContainerHighest = palette.surfaceOverlay
     val surfaceDim = palette.surface
     val surfaceBright = palette.canvas
-    val outline = palette.border
+    // `input` is the field-border tone; `border` stays on outlineVariant so
+    // dividers remain subtle while text fields keep enough contrast.
+    val outline = palette.input
     val outlineVariant = palette.border
     val inverseSurface = palette.toolbar
     val inverseOnSurface = palette.toolbarForeground
@@ -105,8 +136,12 @@ private fun sharedSchemeArgs(palette: ThemePalette) = object {
     val scrim = Color(0x66000000)
 }
 
-private fun colorSchemeFor(palette: ThemePalette, dark: Boolean): androidx.compose.material3.ColorScheme {
-    val a = sharedSchemeArgs(palette)
+private fun colorSchemeFor(
+    palette: ThemePalette,
+    themeId: String,
+    dark: Boolean,
+): androidx.compose.material3.ColorScheme {
+    val a = sharedSchemeArgs(palette, groupedCardColor(palette, themeId, dark))
     return if (dark) {
         darkColorScheme(
             primary = a.primary, onPrimary = a.onPrimary,
@@ -156,7 +191,7 @@ private fun colorSchemeFor(palette: ThemePalette, dark: Boolean): androidx.compo
     }
 }
 
-private fun extendedColorsFor(palette: ThemePalette) = T3Colors(
+private fun extendedColorsFor(palette: ThemePalette, themeId: String, dark: Boolean) = T3Colors(
     userBubble = palette.messageSurface,
     onUserBubble = palette.messageForeground,
     userBubbleAction = palette.messageAction,
@@ -170,6 +205,9 @@ private fun extendedColorsFor(palette: ThemePalette) = T3Colors(
     drawerMuted = palette.sidebarMutedForeground,
     drawerControl = palette.sidebarControlSurface,
     drawerBorder = palette.sidebarBorder,
+    groupedCard = groupedCardColor(palette, themeId, dark),
+    diffAddition = if (dark) Color(0xFF6FD69A) else Color(0xFF1B7D50),
+    diffDeletion = palette.errorForeground,
     searchMatchBackground = palette.searchMatchBackground,
     searchMatchForeground = palette.searchMatchForeground,
     warningSurface = palette.warningSurface,
@@ -179,8 +217,8 @@ private fun extendedColorsFor(palette: ThemePalette) = T3Colors(
 )
 
 private fun extendedColorsForSystem(dark: Boolean) = T3Colors(
-    userBubble = if (dark) Color(0xFFECECF1) else Color(0xFFECECF1),
-    onUserBubble = if (dark) Color(0xFF1B1B1F) else Color(0xFF1B1B1F),
+    userBubble = if (dark) Color(0xFF2A2A31) else Color(0xFFECECF1),
+    onUserBubble = if (dark) Color(0xFFF4F4F5) else Color(0xFF1B1B1F),
     userBubbleAction = Color(0xFF1B4ED8),
     onUserBubbleAction = Color(0xFFFFFFFF),
     codeBackground = if (dark) Color(0xFF27272A) else Color(0xFFF4F4F5),
@@ -192,6 +230,9 @@ private fun extendedColorsForSystem(dark: Boolean) = T3Colors(
     drawerMuted = if (dark) Color(0xFFB4B2BC) else Color(0xFF71717B),
     drawerControl = if (dark) Color(0xFF2B2B32) else Color(0xFFF4F4F5),
     drawerBorder = if (dark) Color(0xFF2E2E36) else Color(0xFFE4E4E7),
+    groupedCard = if (dark) Color(0xFF1A1B1B) else Color(0xFFF4F4F5),
+    diffAddition = if (dark) Color(0xFF6FD69A) else Color(0xFF1B7D50),
+    diffDeletion = if (dark) Color(0xFFFF6467) else Color(0xFFC10007),
     searchMatchBackground = Color(0xFFFFDE8B),
     searchMatchForeground = Color(0xFF21180A),
     warningSurface = if (dark) Color(0xFF3B2F00) else Color(0xFFFFF3D6),
@@ -276,9 +317,13 @@ fun T3Theme(
 
     val colorScheme = when {
         materialYou -> if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        else -> colorSchemeFor(ThemePalettes.byId(themeId, dark), dark)
+        else -> colorSchemeFor(ThemePalettes.byId(themeId, dark), themeId, dark)
     }
-    val extended = if (materialYou) extendedColorsForSystem(dark) else extendedColorsFor(ThemePalettes.byId(themeId, dark))
+    val extended = if (materialYou) {
+        extendedColorsForSystem(dark)
+    } else {
+        extendedColorsFor(ThemePalettes.byId(themeId, dark), themeId, dark)
+    }
     val scale = baseFontSize.coerceIn(AppSettings.MIN_BASE_FONT_SIZE, AppSettings.MAX_BASE_FONT_SIZE).toFloat() / AppSettings.DEFAULT_BASE_FONT_SIZE
 
     val view = LocalView.current
@@ -293,6 +338,16 @@ fun T3Theme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = scaledTypography(scale),
-        content = { androidx.compose.runtime.CompositionLocalProvider(LocalT3Colors provides extended, content = content) },
-    )
+    ) {
+        CompositionLocalProvider(LocalT3Colors provides extended) {
+            // A root surface keeps every top-level screen on the themed canvas
+            // and gives unstyled icons/text a readable content color in dark mode.
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = colorScheme.background,
+                contentColor = colorScheme.onBackground,
+                content = content,
+            )
+        }
+    }
 }

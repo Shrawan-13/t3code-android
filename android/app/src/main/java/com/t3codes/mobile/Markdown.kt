@@ -310,7 +310,11 @@ private fun MarkdownCodeBlock(code: String, language: String, color: Color) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+        ),
     ) {
         Column {
             Row(
@@ -494,7 +498,7 @@ private fun MarkdownImage(node: Image) {
 private fun markdownInline(node: Node?): AnnotatedString {
     if (node == null) return AnnotatedString("")
     val linkColor = MaterialTheme.colorScheme.primary
-    val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
+    val codeBackground = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
     val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant
     return remember(node, linkColor, codeBackground, mutedColor) {
         buildAnnotatedString {

@@ -294,7 +294,7 @@ fun GroupedCard(
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        color = LocalT3Colors.current.groupedCard,
     ) {
         Column(content = { content() })
     }
@@ -323,7 +323,7 @@ fun EmptyState(
     ) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
         ) {
             Icon(
                 imageVector = icon,
@@ -633,7 +633,7 @@ fun ToolCard(entry: TimelineEntry) {
                     imageVector = Icons.Rounded.Info,
                     contentDescription = null,
                     modifier = Modifier.size(15.dp),
-                    tint = MaterialTheme.colorScheme.secondary,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
@@ -1039,8 +1039,8 @@ private fun WorkEntryIcon(entry: TimelineEntry) {
             WorkAction.Command -> MaterialTheme.colorScheme.onSurfaceVariant
             WorkAction.Edit -> MaterialTheme.colorScheme.tertiary
             WorkAction.Read -> MaterialTheme.colorScheme.onSurfaceVariant
-            WorkAction.Search -> MaterialTheme.colorScheme.secondary
-            WorkAction.Browse -> MaterialTheme.colorScheme.secondary
+            WorkAction.Search -> MaterialTheme.colorScheme.onSurfaceVariant
+            WorkAction.Browse -> MaterialTheme.colorScheme.onSurfaceVariant
             WorkAction.Tool -> MaterialTheme.colorScheme.onSurfaceVariant
         },
     )

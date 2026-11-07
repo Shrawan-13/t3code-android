@@ -797,7 +797,7 @@ private fun ThreadRow(
         else -> relativeTime(thread.updatedAt.ifEmpty { thread.createdAt })
     }
     val rightColor = when {
-        snoozed -> MaterialTheme.colorScheme.secondary
+        snoozed -> MaterialTheme.colorScheme.onSurfaceVariant
         settled -> MaterialTheme.colorScheme.tertiary
         status.tone == StatusTone.Error -> MaterialTheme.colorScheme.error
         status.tone == StatusTone.Attention -> MaterialTheme.colorScheme.tertiary
@@ -870,7 +870,7 @@ private fun ThreadRow(
                         modifier = Modifier
                             .padding(top = 3.dp)
                             .size(14.dp),
-                        tint = MaterialTheme.colorScheme.secondary,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.width(6.dp))
                 }
