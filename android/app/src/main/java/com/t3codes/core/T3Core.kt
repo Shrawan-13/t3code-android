@@ -179,6 +179,17 @@ class T3Connection internal constructor(
     fun shell(): ShellSnapshot =
         T3Core.json.decodeFromString(T3Core.ensureOk(Native.nativeShell(handle)).toString())
 
+    /**
+     * Archived threads come from their own snapshot; the live shell can leave
+     * them out entirely, which is why the archive page stayed empty.
+     */
+    fun archivedThreads(): List<ThreadShell> {
+        val snapshot: ArchivedShellSnapshot = T3Core.json.decodeFromJsonElement(
+            callRaw("orchestration.getArchivedShellSnapshot"),
+        )
+        return snapshot.threads
+    }
+
     fun projects(): ProjectSnapshot = call("projects.list")
 
     /**
@@ -385,6 +396,48 @@ class T3Connection internal constructor(
                 ),
             ),
         )
+    }
+
+    /** Removes one message waiting in the server-side queue. */
+    fun cancelQueuedRun(threadId: String, runId: String) {
+        dispatchThreadCommand(
+            buildJsonObject {
+                put("type", "queued-run.cancel")
+                put("threadId", threadId)
+                put("runId", runId)
+            },
+        )
+    }
+
+    /** Promotes a queued message into the active turn (steer now). */
+    fun promoteQueuedRun(threadId: String, queuedRunId: String, targetRunId: String) {
+        dispatchThreadCommand(
+            buildJsonObject {
+                put("type", "queued-message.promote-to-steer")
+                put("threadId", threadId)
+                put("queuedRunId", queuedRunId)
+                put("targetRunId", targetRunId)
+            },
+        )
+    }
+
+    /** Starts the whole queue now, or one specific queued run when [runId] is set. */
+    fun resumeThreadQueue(threadId: String, runId: String? = null) {
+        dispatchThreadCommand(
+            buildJsonObject {
+                put("type", if (runId == null) "queue.resume" else "queued-run.start")
+                put("threadId", threadId)
+                runId?.let { put("runId", it) }
+            },
+        )
+    }
+
+    private fun dispatchThreadCommand(payload: kotlinx.serialization.json.JsonObject) {
+        val body = buildJsonObject {
+            payload.forEach { (key, value) -> put(key, value) }
+            put("commandId", UUID.randomUUID().toString())
+        }
+        callRaw("orchestration.dispatchCommand", body)
     }
 
     fun respondToRequest(

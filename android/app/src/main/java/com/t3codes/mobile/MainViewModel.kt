@@ -196,6 +196,8 @@ data class UiState(
     val projects: List<Project> = emptyList(),
     val threads: List<ThreadShell> = emptyList(),
     val archivedThreads: List<ThreadShell> = emptyList(),
+    val archivedLoading: Boolean = false,
+    val archivedError: String? = null,
     val shellLoaded: Boolean = false,
     val connectionStatus: ConnectionStatus = ConnectionStatus.Offline,
     val connectionNote: String? = null,
@@ -2163,7 +2165,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openArchive() {
         state = state.copy(archiveOpen = true, homeFilterOpen = false)
-        refresh()
+        refreshArchivedThreads()
+    }
+
+    /**
+     * The live shell may omit archived chats, so the archive page asks the
+     * server for its dedicated archived snapshot whenever it opens.
+     */
+    fun refreshArchivedThreads() {
+        val conn = connection ?: return
+        if (state.archivedLoading) return
+        state = state.copy(archivedLoading = true, archivedError = null)
+        viewModelScope.launch {
+            try {
+                val archived = withContext(Dispatchers.IO) { conn.archivedThreads() }
+                if (connection !== conn) return@launch
+                state = state.copy(
+                    archivedThreads = archived,
+                    archivedLoading = false,
+                    archivedError = null,
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                if (connection !== conn) return@launch
+                state = state.copy(
+                    archivedLoading = false,
+                    archivedError = "Could not load archived chats. ${describe(error)}",
+                )
+            }
+        }
     }
 
     fun closeArchive() {
@@ -2227,6 +2258,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendMessage(text: String) {
+        sendMessageInternal(text, followUpAction = null)
+    }
+
+    /** Explicit Queue or Steer chosen from the composer's long-press menu. */
+    fun sendMessageWithAction(text: String, action: String) {
+        sendMessageInternal(text, followUpAction = action)
+    }
+
+    private fun sendMessageInternal(text: String, followUpAction: String?) {
         val current = state.thread ?: return
         if (current.sending) return
         val conn = connection ?: return
@@ -2264,7 +2304,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val activeRunId = current.projection.thread.activeRunId ?: current.summary?.activeRunId
-                val steer = running && state.followUpBehavior == "steer" && !activeRunId.isNullOrBlank()
+                val steer = running && !activeRunId.isNullOrBlank() &&
+                    when (followUpAction) {
+                        "steer" -> true
+                        "queue" -> false
+                        else -> state.followUpBehavior == "steer"
+                    }
                 withContext(Dispatchers.IO) {
                     conn.sendMessage(
                         threadId = current.threadId,
@@ -2300,6 +2345,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         ),
                     )
                 }
+            }
+        }
+    }
+
+    fun cancelQueuedRun(runId: String) {
+        val current = state.thread ?: return
+        val conn = connection ?: return
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { conn.cancelQueuedRun(current.threadId, runId) }
+                refreshThread()
+            } catch (error: Throwable) {
+                toast(describe(error))
+            }
+        }
+    }
+
+    /** "Send now": promote into the active turn, or start the queue when idle. */
+    fun sendQueuedRunNow(runId: String) {
+        val current = state.thread ?: return
+        val conn = connection ?: return
+        val activeRunId = current.projection.thread.activeRunId
+            ?: current.summary?.activeRunId
+            ?: state.summaryFor(current.threadId)?.activeRunId
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    if (activeRunId.isNullOrBlank()) {
+                        conn.resumeThreadQueue(current.threadId, runId)
+                    } else {
+                        conn.promoteQueuedRun(current.threadId, runId, activeRunId)
+                    }
+                }
+                refreshThread()
+            } catch (error: Throwable) {
+                toast(describe(error))
+            }
+        }
+    }
+
+    fun resumeThreadQueue() {
+        val current = state.thread ?: return
+        val conn = connection ?: return
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { conn.resumeThreadQueue(current.threadId) }
+                refreshThread()
+            } catch (error: Throwable) {
+                toast(describe(error))
             }
         }
     }

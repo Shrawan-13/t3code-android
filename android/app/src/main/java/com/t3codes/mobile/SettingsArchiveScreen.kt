@@ -19,8 +19,10 @@ import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Unarchive
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -29,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,61 +59,101 @@ fun ArchiveScreen(state: UiState, viewModel: MainViewModel, onBack: () -> Unit) 
     }
     var deleteTarget by remember { mutableStateOf<ThreadShell?>(null) }
 
+    LaunchedEffect(Unit) { viewModel.refreshArchivedThreads() }
+
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(
             title = "Archive",
             leading = { BackButton(onBack) },
-            modifier = Modifier.padding(start = 8.dp, end = 20.dp, top = 10.dp),
+            modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 10.dp),
+            actions = {
+                IconButton(
+                    onClick = viewModel::refreshArchivedThreads,
+                    enabled = !state.archivedLoading,
+                ) {
+                    if (state.archivedLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = "Refresh archived chats",
+                            modifier = Modifier.size(21.dp),
+                        )
+                    }
+                }
+            },
         )
-        if (archived.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                contentAlignment = Alignment.Center,
-            ) {
-                EmptyState(
-                    icon = Icons.Rounded.Archive,
-                    title = "No archived chats",
-                    message = "Archived chats appear here.",
-                )
+        state.archivedError?.let { message ->
+            ErrorBanner(
+                message = message,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                onRetry = viewModel::refreshArchivedThreads,
+            )
+        }
+        when {
+            state.archivedLoading && archived.isEmpty() -> {
+                Box(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                contentPadding = PaddingValues(
-                    start = 16.dp,
-                    end = 16.dp,
-                    top = 12.dp,
-                    bottom = 28.dp,
-                ),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                item {
-                    SectionLabel(
-                        text = "Archived",
-                        trailing = {
-                            Text(
-                                text = archived.size.toString(),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            )
-                        },
+            archived.isEmpty() -> {
+                Box(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    EmptyState(
+                        icon = Icons.Rounded.Archive,
+                        title = "No archived chats",
+                        message = "Archived chats appear here.",
                     )
                 }
-                item {
-                    GroupedCard {
-                        archived.forEach { thread ->
-                            ArchivedThreadRow(
-                                thread = thread,
-                                state = state,
-                                onOpen = {
-                                    viewModel.closeArchive()
-                                    viewModel.openThread(thread.id)
-                                },
-                                onUnarchive = {
-                                    viewModel.threadAction(thread.id, "unarchive")
-                                },
-                                onDelete = { deleteTarget = thread },
-                            )
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 12.dp,
+                        bottom = 28.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    item {
+                        SectionLabel(
+                            text = "Archived",
+                            trailing = {
+                                Text(
+                                    text = archived.size.toString(),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                )
+                            },
+                        )
+                    }
+                    item {
+                        GroupedCard {
+                            archived.forEach { thread ->
+                                ArchivedThreadRow(
+                                    thread = thread,
+                                    state = state,
+                                    onOpen = {
+                                        viewModel.closeArchive()
+                                        viewModel.openThread(thread.id)
+                                    },
+                                    onUnarchive = {
+                                        viewModel.threadAction(thread.id, "unarchive")
+                                    },
+                                    onDelete = { deleteTarget = thread },
+                                )
+                            }
                         }
                     }
                 }

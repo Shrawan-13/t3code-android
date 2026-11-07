@@ -4,7 +4,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -38,6 +40,8 @@ import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.FormatListBulleted
+import androidx.compose.material.icons.rounded.Reply
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
@@ -71,6 +75,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -92,6 +97,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
@@ -151,6 +157,8 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
     var deleteOpen by remember { mutableStateOf(false) }
     var runtimePickerOpen by remember { mutableStateOf(false) }
     var agentsOpen by remember { mutableStateOf(false) }
+    var modelPickerOpen by remember { mutableStateOf(false) }
+    var queueOpen by remember { mutableStateOf(false) }
     val runtimeMode = summary?.runtimeMode.orEmpty()
     val planMode = summary?.interactionMode == "plan"
     val subagents = remember(projection.subagents, state.threads, thread.threadId) {
@@ -436,8 +444,12 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                 summary = summary,
                 running = running,
                 config = state.config,
+                followUpBehavior = state.followUpBehavior,
                 modelsRefreshing = state.modelsRefreshing,
-                onRefreshModels = { viewModel.ensureModelsLoaded(force = true) },
+                onOpenModelPicker = {
+                    modelPickerOpen = true
+                    viewModel.ensureModelsLoaded(force = false)
+                },
                 onSelectModel = { choice ->
                     val selection = ModelSelection(
                         instanceId = choice.instanceId,
@@ -450,6 +462,8 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                     )
                 },
                 onSend = viewModel::sendMessage,
+                onSendAction = viewModel::sendMessageWithAction,
+                onOpenQueue = { queueOpen = true },
                 onStop = viewModel::stopRun,
                 onAttach = viewModel::attach,
                 onRemoveAttachment = viewModel::removeAttachment,
@@ -586,6 +600,49 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                     agentsOpen = false
                     viewModel.openSubagentThread(childId)
                 },
+            )
+        }
+    }
+
+    if (modelPickerOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { modelPickerOpen = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            ModelPickerSheet(
+                config = state.config,
+                currentSelection = summary?.modelSelection?.takeIf { it.model.isNotBlank() }
+                    ?: projection.thread.modelSelection.takeIf { it.model.isNotBlank() },
+                modelsRefreshing = state.modelsRefreshing,
+                onRefresh = { viewModel.ensureModelsLoaded(force = true) },
+                onSelect = { choice ->
+                    val selection = ModelSelection(
+                        instanceId = choice.instanceId,
+                        model = choice.model.key,
+                    )
+                    viewModel.threadAction(
+                        thread.threadId,
+                        "setModel",
+                        T3Core.json.encodeToJsonElement(selection).toString(),
+                    )
+                },
+                onDismiss = { modelPickerOpen = false },
+            )
+        }
+    }
+
+    if (queueOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { queueOpen = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ) {
+            QueueSheet(
+                runs = thread.projection.queuedRuns,
+                running = running,
+                onSendNow = viewModel::sendQueuedRunNow,
+                onRemove = viewModel::cancelQueuedRun,
+                onResume = viewModel::resumeThreadQueue,
             )
         }
     }
@@ -925,10 +982,13 @@ private fun ComposerColumn(
     summary: ThreadShell?,
     running: Boolean,
     config: ServerConfig?,
+    followUpBehavior: String,
     modelsRefreshing: Boolean,
-    onRefreshModels: () -> Unit,
+    onOpenModelPicker: () -> Unit,
     onSelectModel: (ModelChoice) -> Unit,
     onSend: (String) -> Unit,
+    onSendAction: (String, String) -> Unit,
+    onOpenQueue: () -> Unit,
     onStop: () -> Unit,
     onAttach: (android.net.Uri) -> Unit,
     onRemoveAttachment: (com.t3codes.core.Attachment) -> Unit,
@@ -971,19 +1031,173 @@ private fun ComposerColumn(
                 )
             }
         }
+        val queued = thread.projection.queuedRuns
+        if (queued.isNotEmpty()) {
+            QueuedPill(
+                count = queued.size,
+                held = queued.any { it.held },
+                onClick = onOpenQueue,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+            )
+        }
         Composer(
             thread = thread,
             summary = summary,
             running = running,
             config = config,
+            followUpBehavior = followUpBehavior,
             modelsRefreshing = modelsRefreshing,
-            onRefreshModels = onRefreshModels,
+            onOpenModelPicker = onOpenModelPicker,
             onSelectModel = onSelectModel,
             onSend = onSend,
+            onSendAction = onSendAction,
             onStop = onStop,
             onPickAttachment = { picker.launch("*/*") },
             onRemoveAttachment = onRemoveAttachment,
         )
+    }
+}
+
+@Composable
+private fun QueuedPill(
+    count: Int,
+    held: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = modifier,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.ArrowUpward,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = if (held) "$count queued · paused" else "$count queued",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+@Composable
+private fun QueueSheet(
+    runs: List<com.t3codes.core.QueuedRunUi>,
+    running: Boolean,
+    onSendNow: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onResume: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 18.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 12.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Queue",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = runs.size.toString(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (runs.any { it.held }) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Queue paused",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onResume) { Text("Resume") }
+            }
+        }
+        if (runs.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "No messages waiting in this queue.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(runs, key = { it.runId }) { run ->
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = run.text,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 3,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = if (running) "Runs after the current turn"
+                                    else "Ready to send",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            IconButton(onClick = { onSendNow(run.runId) }) {
+                                Icon(
+                                    imageVector = Icons.Rounded.ArrowUpward,
+                                    contentDescription = "Send now",
+                                    modifier = Modifier.size(19.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            IconButton(onClick = { onRemove(run.runId) }) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Delete,
+                                    contentDescription = "Remove queued message",
+                                    modifier = Modifier.size(19.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1323,22 +1537,25 @@ private fun buildUserInputAnswers(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun Composer(
     thread: ThreadUi,
     summary: ThreadShell?,
     running: Boolean,
     config: ServerConfig?,
+    followUpBehavior: String,
     modelsRefreshing: Boolean,
-    onRefreshModels: () -> Unit,
+    onOpenModelPicker: () -> Unit,
     onSelectModel: (ModelChoice) -> Unit,
     onSend: (String) -> Unit,
+    onSendAction: (String, String) -> Unit,
     onStop: () -> Unit,
     onPickAttachment: () -> Unit,
     onRemoveAttachment: (com.t3codes.core.Attachment) -> Unit,
 ) {
     var text by rememberSaveable(thread.threadId) { mutableStateOf("") }
-    var modelMenuOpen by remember(thread.threadId) { mutableStateOf(false) }
+    var sendMenuOpen by remember(thread.threadId) { mutableStateOf(false) }
     val canSend = text.isNotBlank() || thread.pendingAttachments.isNotEmpty()
     val modelChoices = remember(config) { config?.modelChoices().orEmpty() }
     val currentSelection = summary?.modelSelection
@@ -1434,112 +1651,47 @@ private fun Composer(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Box {
-                    Surface(
-                        onClick = {
-                            modelMenuOpen = true
-                            onRefreshModels()
-                        },
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (modelsRefreshing) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(12.dp),
-                                    strokeWidth = 1.6.dp,
-                                    color = MaterialTheme.colorScheme.primary,
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Rounded.AutoAwesome,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(13.dp),
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                            Spacer(Modifier.width(5.dp))
-                            Text(
-                                text = modelLabel ?: if (modelsRefreshing) {
-                                    "Loading models…"
-                                } else {
-                                    "Model"
-                                },
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Spacer(Modifier.width(3.dp))
-                            Icon(
-                                Icons.Rounded.KeyboardArrowDown,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    DropdownMenu(
-                        expanded = modelMenuOpen,
-                        onDismissRequest = { modelMenuOpen = false },
+                Surface(
+                    onClick = onOpenModelPicker,
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         if (modelsRefreshing) {
-                            DropdownMenuItem(
-                                text = { Text("Loading models…") },
-                                leadingIcon = {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(15.dp),
-                                        strokeWidth = 1.8.dp,
-                                    )
-                                },
-                                onClick = {},
-                                enabled = false,
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 1.6.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        } else {
+                            Icon(
+                                Icons.Rounded.AutoAwesome,
+                                contentDescription = null,
+                                modifier = Modifier.size(13.dp),
+                                tint = MaterialTheme.colorScheme.primary,
                             )
                         }
-                        if (modelChoices.isEmpty() && !modelsRefreshing) {
-                            DropdownMenuItem(
-                                text = { Text("Refresh models") },
-                                leadingIcon = { Icon(Icons.Rounded.Refresh, contentDescription = null) },
-                                onClick = onRefreshModels,
-                            )
-                        }
-                        modelChoices.forEach { choice ->
-                            val selected = currentSelection?.instanceId == choice.instanceId &&
-                                (currentSelection?.model == choice.model.key ||
-                                    currentSelection?.model == choice.model.slug)
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(
-                                            text = choice.model.label,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        Text(
-                                            text = choice.providerName,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                },
-                                trailingIcon = {
-                                    if (selected) {
-                                        Icon(
-                                            Icons.Rounded.Check,
-                                            contentDescription = "Selected",
-                                            modifier = Modifier.size(18.dp),
-                                            tint = MaterialTheme.colorScheme.primary,
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    modelMenuOpen = false
-                                    onSelectModel(choice)
-                                },
-                            )
-                        }
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            text = modelLabel ?: if (modelsRefreshing) {
+                                "Loading models…"
+                            } else {
+                                "Model"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Icon(
+                            Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
                 Spacer(Modifier.weight(1f))
@@ -1557,21 +1709,31 @@ private fun Composer(
                     Spacer(Modifier.width(8.dp))
                 }
                 if (!running || canSend) {
-                    Surface(
-                        onClick = {
-                            if (canSend) {
-                                onSend(text)
-                                text = ""
-                            }
-                        },
-                        enabled = canSend && !thread.sending,
-                        shape = CircleShape,
-                        color = if (canSend) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.surfaceContainerHighest,
-                        contentColor = if (canSend) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    ) {
-                        Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                    val enabled = canSend && !thread.sending
+                    val steerMode = running && followUpBehavior == "steer"
+                    Box {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (canSend) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.surfaceContainerHighest,
+                                )
+                                .combinedClickable(
+                                    enabled = enabled,
+                                    onClick = {
+                                        if (canSend) {
+                                            onSend(text)
+                                            text = ""
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (running && canSend) sendMenuOpen = true
+                                    },
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
                             if (thread.sending) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(18.dp),
@@ -1580,11 +1742,70 @@ private fun Composer(
                                 )
                             } else {
                                 Icon(
-                                    Icons.Rounded.ArrowUpward,
-                                    contentDescription = if (running) "Queue message" else "Send",
+                                    imageVector = when {
+                                        !running -> Icons.Rounded.ArrowUpward
+                                        steerMode -> Icons.Rounded.Reply
+                                        else -> Icons.Rounded.FormatListBulleted
+                                    },
+                                    contentDescription = when {
+                                        !running -> "Send"
+                                        steerMode -> "Steer message"
+                                        else -> "Queue message"
+                                    },
                                     modifier = Modifier.size(21.dp),
+                                    tint = if (canSend) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
+                        }
+                        DropdownMenu(
+                            expanded = sendMenuOpen,
+                            onDismissRequest = { sendMenuOpen = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text("Queue")
+                                        Text(
+                                            text = "Run after the current turn",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.FormatListBulleted, contentDescription = null)
+                                },
+                                onClick = {
+                                    sendMenuOpen = false
+                                    if (canSend) {
+                                        onSendAction(text, "queue")
+                                        text = ""
+                                    }
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text("Steer now")
+                                        Text(
+                                            text = "Interrupt what the agent is doing",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.Reply, contentDescription = null)
+                                },
+                                onClick = {
+                                    sendMenuOpen = false
+                                    if (canSend) {
+                                        onSendAction(text, "steer")
+                                        text = ""
+                                    }
+                                },
+                            )
                         }
                     }
                 }

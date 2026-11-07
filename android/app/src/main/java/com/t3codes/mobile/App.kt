@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -145,7 +146,13 @@ fun T3App(viewModel: MainViewModel) {
             state.terminal != null -> TerminalScreen(state, viewModel)
             state.diff != null -> DiffScreen(state, viewModel)
             state.files != null -> FilesScreen(state, viewModel)
-            state.archiveOpen -> ArchiveScreen(state, viewModel, onBack = viewModel::closeArchive)
+            state.archiveOpen -> Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding(),
+            ) {
+                ArchiveScreen(state, viewModel, onBack = viewModel::closeArchive)
+            }
             state.activeThreadId != null && state.thread != null -> ThreadScreen(state, viewModel)
             else -> HomeScaffold(state, viewModel)
         }

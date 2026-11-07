@@ -5,8 +5,11 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 @Serializable
 data class Platform(val os: String = "", val arch: String = "")
@@ -84,8 +87,11 @@ data class Model(
     val name: String = "",
     val displayName: String = "",
     val description: String = "",
+    val subProvider: String = "",
     val contextWindow: Int? = null,
     val isCustom: Boolean = false,
+    val isDefault: Boolean = false,
+    val isLegacy: Boolean = false,
     val capabilities: JsonElement? = null,
 ) {
     val key: String
@@ -311,6 +317,15 @@ data class ShellSnapshot(
     val projects: List<Project> = emptyList(),
 )
 
+/** Response of orchestration.getArchivedShellSnapshot: [threads] holds archived threads. */
+@Serializable
+data class ArchivedShellSnapshot(
+    val schemaVersion: Int = 0,
+    val snapshotSequence: Long = 0,
+    val projects: List<Project> = emptyList(),
+    val threads: List<ThreadShell> = emptyList(),
+)
+
 @Serializable
 data class ShellEvent(
     val kind: String = "",
@@ -461,7 +476,40 @@ data class ThreadProjection(
             runCatching { T3Core.json.decodeFromJsonElement(Subagent.serializer(), element) }
                 .getOrNull()
         }
+
+    /** Messages waiting in the server-side run queue, in queue order. */
+    val queuedRuns: List<QueuedRunUi>
+        get() {
+            val messagesById = messages.associateBy { it.id }
+            return runs.mapNotNull { element ->
+                val obj = element as? JsonObject ?: return@mapNotNull null
+                if ((obj["status"] as? JsonPrimitive)?.contentOrNull != "queued") {
+                    return@mapNotNull null
+                }
+                val runId = (obj["id"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                val messageId = (obj["userMessageId"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                val position = (obj["queuePosition"] as? JsonPrimitive)?.intOrNull ?: Int.MAX_VALUE
+                val held = (obj["queueHeld"] as? JsonPrimitive)?.booleanOrNull == true
+                QueuedRunUi(
+                    runId = runId,
+                    messageId = messageId,
+                    text = messagesById[messageId]?.text?.takeIf { it.isNotBlank() }
+                        ?: "Queued message",
+                    position = position,
+                    held = held,
+                )
+            }.sortedBy { it.position }
+        }
 }
+
+/** One queued message from the projection's runs. */
+data class QueuedRunUi(
+    val runId: String,
+    val messageId: String,
+    val text: String,
+    val position: Int,
+    val held: Boolean,
+)
 
 @Serializable
 data class ThreadState(
