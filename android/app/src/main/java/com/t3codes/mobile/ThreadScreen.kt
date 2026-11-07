@@ -1696,7 +1696,10 @@ private fun SubagentSheet(
     ) {
         Text("Subagents", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(12.dp))
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        LazyColumn(
+            modifier = Modifier.heightIn(max = 420.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             items(subagents, key = { it.id }) { agent ->
                 SubagentSheetRow(
                     agent = agent,
