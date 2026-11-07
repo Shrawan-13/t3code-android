@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
 
 @Serializable
 data class Platform(val os: String = "", val arch: String = "")
@@ -151,7 +152,46 @@ data class ThreadLineage(
     val parentThreadId: String? = null,
     val relationshipToParent: String? = null,
     val rootThreadId: String = "",
+    val sideChat: Boolean = false,
 )
+
+/**
+ * A delegated task that runs alongside a thread. The Android client shows
+ * these on the parent conversation instead of the home list.
+ */
+@Serializable
+data class Subagent(
+    val id: String = "",
+    val threadId: String = "",
+    val runId: String? = null,
+    val childThreadId: String? = null,
+    val origin: String = "",
+    val driver: String = "",
+    val providerInstanceId: String = "",
+    val title: String? = null,
+    val prompt: String = "",
+    val status: String = "",
+    val progress: String? = null,
+    val result: String? = null,
+    val model: String? = null,
+    val startedAt: String? = null,
+    val completedAt: String? = null,
+    val updatedAt: String = "",
+) {
+    val isLive: Boolean get() = status in setOf("pending", "running", "waiting")
+    val isFinished: Boolean get() = status in setOf("completed", "failed", "cancelled", "interrupted")
+    val displayTitle: String
+        get() = title?.trim()?.takeIf { it.isNotEmpty() }
+            ?: prompt.lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: "Subagent"
+}
+
+internal fun parseEpochMillis(value: String?): Long? {
+    if (value.isNullOrBlank()) return null
+    return runCatching { java.time.Instant.parse(value).toEpochMilli() }
+        .recoverCatching { java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli() }
+        .getOrNull()
+}
 
 @Serializable
 data class PendingRuntimeRequestSummary(
@@ -227,6 +267,39 @@ data class ThreadShell(
     val isArchived: Boolean get() = archivedAt != null
     val isPinned: Boolean get() = pinnedAt != null
     val isRunning: Boolean get() = activeRunId != null
+
+    /** Delegated work belongs to its parent conversation, not the home list. */
+    val isSubagentThread: Boolean
+        get() = lineage.relationshipToParent == "subagent" || lineage.sideChat
+
+    /** Mirrors the official client's `isListedThreadLineage`: subagents and side chats stay hidden. */
+    val isListedThread: Boolean get() = !isSubagentThread
+
+    val isUnread: Boolean
+        get() {
+            val latest = latestVisibleMessage ?: return false
+            if (latest.role == "user") return false
+            val visited = parseEpochMillis(lastVisitedAt) ?: return true
+            val created = parseEpochMillis(latest.createdAt) ?: return false
+            return created > visited
+        }
+
+    /**
+     * A snoozed thread returns to the list when its timer expires, when it
+     * needs an approval or user input, or when its run fails.
+     */
+    fun isSnoozedNow(nowMs: Long): Boolean {
+        val wake = parseEpochMillis(snoozedUntil) ?: return false
+        if (wake <= nowMs) return false
+        if (pendingRuntimeRequest?.status == "pending") return false
+        val failedAt = parseEpochMillis(updatedAt)
+        val snoozedAtMs = parseEpochMillis(snoozedAt)
+        val failedWhileSnoozed =
+            status in setOf("failed", "error") &&
+                failedAt != null &&
+                (snoozedAtMs == null || failedAt > snoozedAtMs)
+        return !failedWhileSnoozed
+    }
 }
 
 @Serializable
@@ -373,6 +446,13 @@ data class ThreadProjection(
 ) {
     val pendingRequests: List<RuntimeRequest>
         get() = runtimeRequests.filter { it.status == "pending" }
+
+    /** Delegated tasks recorded on this conversation. */
+    val parsedSubagents: List<Subagent>
+        get() = subagents.mapNotNull { element ->
+            runCatching { T3Core.json.decodeFromJsonElement(Subagent.serializer(), element) }
+                .getOrNull()
+        }
 }
 
 @Serializable

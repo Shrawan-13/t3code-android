@@ -40,6 +40,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Difference
@@ -48,6 +49,8 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Inbox
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.MarkEmailRead
+import androidx.compose.material.icons.rounded.MarkEmailUnread
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Refresh
@@ -66,6 +69,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -98,6 +102,7 @@ import com.t3codes.core.ModelSelection
 import com.t3codes.core.Project
 import com.t3codes.core.RuntimeRequest
 import com.t3codes.core.ServerConfig
+import com.t3codes.core.Subagent
 import com.t3codes.core.T3Core
 import com.t3codes.core.ThreadShell
 import com.t3codes.core.ThreadProjection
@@ -143,8 +148,11 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
     var renameOpen by remember { mutableStateOf(false) }
     var deleteOpen by remember { mutableStateOf(false) }
     var runtimePickerOpen by remember { mutableStateOf(false) }
+    var agentsOpen by remember { mutableStateOf(false) }
     val runtimeMode = summary?.runtimeMode.orEmpty()
     val planMode = summary?.interactionMode == "plan"
+    val subagents = remember(projection.subagents) { projection.parsedSubagents }
+    val subagentParentId = effective?.lineage?.parentThreadId
 
     LaunchedEffect(thread.threadId) {
         viewModel.ensureModelsLoaded(force = false)
@@ -329,6 +337,24 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                                     )
                                 },
                             )
+                            val unread = summary?.isUnread == true
+                            DropdownMenuItem(
+                                text = { Text(if (unread) "Mark as read" else "Mark as unread") },
+                                leadingIcon = {
+                                    Icon(
+                                        if (unread) Icons.Rounded.MarkEmailRead
+                                        else Icons.Rounded.MarkEmailUnread,
+                                        contentDescription = null,
+                                    )
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    viewModel.threadAction(
+                                        thread.threadId,
+                                        if (unread) "markRead" else "markUnread",
+                                    )
+                                },
+                            )
                             DropdownMenuItem(
                                 text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
                                 leadingIcon = {
@@ -390,6 +416,58 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                 )
             }
+            if (!subagentParentId.isNullOrBlank()) {
+                val parentTitle = state.summaryFor(subagentParentId)?.title
+                    ?.ifBlank { "parent thread" }
+                    ?: "parent thread"
+                Surface(
+                    onClick = viewModel::openParentThread,
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Rounded.ChevronRight,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Subagent",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(
+                                text = parentTitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Text(
+                            text = "Open parent",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+            if (subagents.isNotEmpty()) {
+                SubagentBar(
+                    subagents = subagents,
+                    onOpen = { agentsOpen = true },
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                )
+            }
             Box(modifier = Modifier.fillMaxSize().weight(1f)) {
                 when {
                     thread.loading && rows.isEmpty() -> {
@@ -440,6 +518,21 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                     }
                 }
             }
+        }
+    }
+
+    if (agentsOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { agentsOpen = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ) {
+            SubagentSheet(
+                subagents = subagents,
+                onOpenThread = { childId ->
+                    agentsOpen = false
+                    viewModel.openSubagentThread(childId)
+                },
+            )
         }
     }
 
@@ -1503,4 +1596,179 @@ private fun statusToneColor(tone: StatusTone): Color = when (tone) {
     StatusTone.Active -> MaterialTheme.colorScheme.primary
     StatusTone.Attention -> MaterialTheme.colorScheme.tertiary
     StatusTone.Error -> MaterialTheme.colorScheme.error
+}
+
+@Composable
+private fun SubagentBar(
+    subagents: List<Subagent>,
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val live = subagents.count { it.isLive }
+    val finished = subagents.count { it.isFinished }
+    val summary = when {
+        live > 0 -> "$live of ${subagents.size} agents working"
+        subagents.size == 1 -> "1 agent finished"
+        else -> "$finished of ${subagents.size} agents finished"
+    }
+    val workingTitles = subagents
+        .filter { it.isLive }
+        .map { it.displayTitle }
+        .take(2)
+        .joinToString(" · ")
+    Surface(
+        onClick = onOpen,
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Rounded.AutoAwesome,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = if (live > 0) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(9.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = summary,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (live > 0) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface,
+                )
+                if (workingTitles.isNotEmpty()) {
+                    Text(
+                        text = workingTitles,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Icon(
+                Icons.Rounded.ChevronRight,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SubagentSheet(
+    subagents: List<Subagent>,
+    onOpenThread: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .padding(bottom = 28.dp),
+    ) {
+        Text("Subagents", style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(12.dp))
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            items(subagents, key = { it.id }) { agent ->
+                SubagentSheetRow(
+                    agent = agent,
+                    onOpen = agent.childThreadId?.takeIf { it.isNotBlank() }?.let { childId ->
+                        { onOpenThread(childId) }
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubagentSheetRow(agent: Subagent, onOpen: (() -> Unit)?) {
+    val tone = when {
+        agent.isLive -> MaterialTheme.colorScheme.primary
+        agent.status == "completed" -> MaterialTheme.colorScheme.tertiary
+        agent.status in setOf("failed", "cancelled", "interrupted") ->
+            MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val detail = agent.progress?.takeIf { it.isNotBlank() }
+        ?: agent.result?.takeIf { it.isNotBlank() }
+        ?: agent.prompt.takeIf { it.isNotBlank() }
+    Surface(
+        onClick = { onOpen?.invoke() },
+        enabled = onOpen != null,
+        shape = RoundedCornerShape(14.dp),
+        color = Color.Transparent,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 10.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(top = 6.dp)
+                    .size(7.dp)
+                    .background(tone, CircleShape),
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = agent.displayTitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = subagentStatusLabel(agent.status),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = tone,
+                    )
+                }
+                if (!detail.isNullOrBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = detail.replace('\n', ' ').trim(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (onOpen != null) {
+                Spacer(Modifier.width(8.dp))
+                Icon(
+                    Icons.Rounded.ChevronRight,
+                    contentDescription = "Open subagent",
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+private fun subagentStatusLabel(status: String): String = when (status) {
+    "pending" -> "Queued"
+    "running" -> "Working"
+    "waiting" -> "Waiting"
+    "completed" -> "Done"
+    "failed" -> "Failed"
+    "cancelled" -> "Cancelled"
+    "interrupted" -> "Stopped"
+    "idle" -> "Idle"
+    else -> status.replaceFirstChar { it.uppercase() }
 }

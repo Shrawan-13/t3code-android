@@ -121,6 +121,7 @@ fun T3App(viewModel: MainViewModel) {
             state.files == null && state.activeThreadId != null,
     ) { viewModel.closeThread() }
     BackHandler(enabled = state.settingsPage != null) { viewModel.closeSettingsPage() }
+    BackHandler(enabled = state.archiveOpen) { viewModel.closeArchive() }
     BackHandler(
         enabled = !state.newThreadOpen &&
             state.terminal == null &&
@@ -144,6 +145,7 @@ fun T3App(viewModel: MainViewModel) {
             state.terminal != null -> TerminalScreen(state, viewModel)
             state.diff != null -> DiffScreen(state, viewModel)
             state.files != null -> FilesScreen(state, viewModel)
+            state.archiveOpen -> ArchiveScreen(state, viewModel, onBack = viewModel::closeArchive)
             state.activeThreadId != null && state.thread != null -> ThreadScreen(state, viewModel)
             else -> HomeScaffold(state, viewModel)
         }

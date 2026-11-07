@@ -38,6 +38,8 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Snooze
 import androidx.compose.material.icons.rounded.Unarchive
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -57,6 +59,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -70,19 +73,37 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.t3codes.core.Project
 import com.t3codes.core.ThreadShell
+import com.t3codes.core.parseEpochMillis
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.intOrNull
+import java.time.DayOfWeek
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.temporal.ChronoUnit
+import java.time.temporal.TemporalAdjusters
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
     var renameThread by remember { mutableStateOf<ThreadShell?>(null) }
     var deleteThread by remember { mutableStateOf<ThreadShell?>(null) }
+    var snoozeThread by remember { mutableStateOf<ThreadShell?>(null) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var workingExpanded by rememberSaveable { mutableStateOf(true) }
+    var snoozedExpanded by rememberSaveable { mutableStateOf(true) }
     var settledVisible by rememberSaveable { mutableStateOf(SETTLED_PAGE_SIZE) }
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    // Snoozed threads wake on their own; repartition the list as their timers expire.
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            nowMs = System.currentTimeMillis()
+        }
+    }
 
     // Opening the Chats tab (or returning from a thread) should always show
     // what is on the server right now, even if the live feed went silent while
@@ -102,11 +123,16 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
             projectsById[thread.projectId]?.title?.contains(query, ignoreCase = true) == true
         return matchesProject && matchesSearch
     }
-    val filtered = state.threads.filter(::matches)
-    val pinned = filtered
+    // Delegated tasks and side chats belong to their parent conversation.
+    val filtered = state.threads.filter { it.isListedThread }.filter(::matches)
+    val snoozed = filtered
+        .filter { it.isSnoozedNow(nowMs) }
+        .sortedBy { parseEpochMillis(it.snoozedUntil) ?: Long.MAX_VALUE }
+    val visible = filtered.filterNot { it.isSnoozedNow(nowMs) }
+    val pinned = visible
         .filter { it.pinnedAt != null && it.settledAt == null && !it.isArchived }
         .sortedWith(compareByDescending<ThreadShell> { it.pinOrderKey ?: it.pinnedAt })
-    val chats = filtered
+    val chats = visible
         .filter { it.pinnedAt == null && it.settledAt == null && !it.isArchived }
         .sortedWith(
             compareByDescending<ThreadShell> { it.latestUserMessageAt ?: it.updatedAt }
@@ -114,19 +140,15 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
         )
     val working = if (state.workingShelfEnabled) chats.filter(::isWorkingThread) else emptyList()
     val activeChats = if (state.workingShelfEnabled) chats.filterNot(::isWorkingThread) else chats
-    val archived = state.archivedThreads.filter(::matches)
-    val settled = (
-        filtered.filter { it.settledAt != null && !it.isArchived && it.pinnedAt == null } +
-            filtered.filter { it.settledAt != null && it.pinnedAt != null } +
-            if (state.showArchived) archived else emptyList()
-        )
-        .distinctBy { it.id }
+    val archived = state.archivedThreads.filter { it.isListedThread }.filter(::matches)
+    val settled = visible
+        .filter { it.settledAt != null && !it.isArchived }
         .sortedWith(
             compareByDescending<ThreadShell> { it.settledAt ?: it.updatedAt }
                 .thenByDescending { it.createdAt },
         )
     val selectedProject = state.projectFilter?.let { projectsById[it] }
-    val settledResetKey = "${state.projectFilter.orEmpty()}:$query:${state.showArchived}"
+    val settledResetKey = "${state.projectFilter.orEmpty()}:$query"
     LaunchedEffect(settledResetKey) { settledVisible = SETTLED_PAGE_SIZE }
     Column(modifier = Modifier.fillMaxSize()) {
         HomeTopBar(
@@ -137,6 +159,8 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                 searchOpen = !searchOpen
             },
             onRefresh = viewModel::refresh,
+            onArchive = viewModel::openArchive,
+            archivedCount = state.archivedThreads.count { it.isListedThread },
             onSettings = { viewModel.selectTab(AppTab.Settings) },
         )
 
@@ -214,6 +238,7 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                         onAction = { thread, action, value -> viewModel.threadAction(thread.id, action, value) },
                         onRename = { renameThread = it },
                         onDelete = { deleteThread = it },
+                        onSnooze = { snoozeThread = it },
                     )
                 }
             }
@@ -242,6 +267,7 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                             },
                             onRename = { renameThread = it },
                             onDelete = { deleteThread = it },
+                        onSnooze = { snoozeThread = it },
                         )
                     }
                 }
@@ -263,13 +289,43 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                         onAction = { thread, action, value -> viewModel.threadAction(thread.id, action, value) },
                         onRename = { renameThread = it },
                         onDelete = { deleteThread = it },
+                        onSnooze = { snoozeThread = it },
                     )
                 }
             }
 
-            val noThreads = filtered.isEmpty() &&
-                settled.isEmpty() &&
-                (!state.showArchived || archived.isEmpty())
+            if (snoozed.isNotEmpty()) {
+                item {
+                    ChatSectionLabel(
+                        text = "Snoozed",
+                        count = snoozed.size,
+                        trailing = {
+                            TextButton(onClick = { snoozedExpanded = !snoozedExpanded }) {
+                                Text(if (snoozedExpanded) "Hide" else "Show")
+                            }
+                        },
+                    )
+                }
+                if (snoozedExpanded) {
+                    item {
+                        ThreadGroup(
+                            threads = snoozed,
+                            projects = projectsById,
+                            archived = false,
+                            snoozed = true,
+                            onOpen = viewModel::openThread,
+                            onAction = { thread, action, value ->
+                                viewModel.threadAction(thread.id, action, value)
+                            },
+                            onRename = { renameThread = it },
+                            onDelete = { deleteThread = it },
+                        onSnooze = { snoozeThread = it },
+                        )
+                    }
+                }
+            }
+
+            val noThreads = filtered.isEmpty() && settled.isEmpty()
             if (!state.shellLoaded && state.threads.isEmpty() && state.archivedThreads.isEmpty()) {
                 item { WorkingRow("Loading chats from ${state.config?.environment?.label ?: "the machine"}…") }
             } else if (noThreads) {
@@ -328,6 +384,7 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                             },
                             onRename = { renameThread = it },
                             onDelete = { deleteThread = it },
+                        onSnooze = { snoozeThread = it },
                         )
                     }
                     if (visibleSettled.size < settled.size) {
@@ -422,20 +479,29 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                 }
                 Spacer(Modifier.height(14.dp))
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { viewModel.openArchive() }
+                        .padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Archived chats", style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            text = "Show archived conversations in the list",
+                            text = if (archived.isEmpty()) {
+                                "Restore archived conversations"
+                            } else {
+                                "${archived.size} archived · tap to restore"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Switch(
-                        checked = state.showArchived,
-                        onCheckedChange = { viewModel.toggleArchived() },
+                    Icon(
+                        Icons.Rounded.Archive,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
                     )
                 }
                 Spacer(Modifier.height(20.dp))
@@ -445,7 +511,6 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                             viewModel.setProjectFilter(null)
                             viewModel.setSearch("")
                             if (!state.showSettled) viewModel.toggleSettled()
-                            if (state.showArchived) viewModel.toggleArchived()
                         },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(16.dp),
@@ -457,6 +522,44 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                 }
             }
         }
+    }
+
+    snoozeThread?.let { thread ->
+        val presets = remember(thread.id) { snoozePresets() }
+        AlertDialog(
+            onDismissRequest = { snoozeThread = null },
+            title = { Text("Snooze") },
+            text = {
+                Column {
+                    presets.forEach { preset ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.threadAction(thread.id, "snooze", preset.until)
+                                    snoozeThread = null
+                                }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = preset.label,
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = preset.whenLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { snoozeThread = null }) { Text("Cancel") }
+            },
+        )
     }
 
     renameThread?.let { thread ->
@@ -519,6 +622,8 @@ private fun HomeTopBar(
     searchOpen: Boolean,
     onToggleSearch: () -> Unit,
     onRefresh: () -> Unit,
+    onArchive: () -> Unit,
+    archivedCount: Int,
     onSettings: () -> Unit,
 ) {
     Row(
@@ -547,6 +652,21 @@ private fun HomeTopBar(
                 contentDescription = "Refresh chats",
                 modifier = Modifier.size(21.dp),
             )
+        }
+        IconButton(onClick = onArchive) {
+            BadgedBox(
+                badge = {
+                    if (archivedCount > 0) {
+                        Badge { Text(archivedCount.toString()) }
+                    }
+                },
+            ) {
+                Icon(
+                    Icons.Rounded.Archive,
+                    contentDescription = "Archived chats",
+                    modifier = Modifier.size(21.dp),
+                )
+            }
         }
         IconButton(onClick = onSettings) {
             Icon(
@@ -627,10 +747,12 @@ private fun ThreadGroup(
     threads: List<ThreadShell>,
     projects: Map<String, Project>,
     archived: Boolean,
+    snoozed: Boolean = false,
     onOpen: (String) -> Unit,
     onAction: (ThreadShell, String, String) -> Unit,
     onRename: (ThreadShell) -> Unit,
     onDelete: (ThreadShell) -> Unit,
+    onSnooze: (ThreadShell) -> Unit,
 ) {
     GroupedCard {
         threads.forEach { thread ->
@@ -638,10 +760,12 @@ private fun ThreadGroup(
                 thread = thread,
                 project = projects[thread.projectId],
                 archived = archived,
+                snoozed = snoozed,
                 onOpen = { onOpen(thread.id) },
                 onAction = { action, value -> onAction(thread, action, value) },
                 onRename = { onRename(thread) },
                 onDelete = { onDelete(thread) },
+                onSnooze = { onSnooze(thread) },
             )
         }
     }
@@ -652,10 +776,12 @@ private fun ThreadRow(
     thread: ThreadShell,
     project: Project?,
     archived: Boolean,
+    snoozed: Boolean = false,
     onOpen: () -> Unit,
     onAction: (String, String) -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    onSnooze: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val status = threadStatus(thread)
@@ -663,6 +789,7 @@ private fun ThreadRow(
     val projectTitle = project?.title?.ifBlank { project.workspaceRoot.substringAfterLast('/') }
         ?: "Project"
     val rightLabel = when {
+        snoozed -> snoozeWakeLabel(thread.snoozedUntil)
         settled -> "Settled"
         status.tone == StatusTone.Error -> "Error"
         status.tone == StatusTone.Attention -> "Needs you"
@@ -670,6 +797,7 @@ private fun ThreadRow(
         else -> relativeTime(thread.updatedAt.ifEmpty { thread.createdAt })
     }
     val rightColor = when {
+        snoozed -> MaterialTheme.colorScheme.secondary
         settled -> MaterialTheme.colorScheme.tertiary
         status.tone == StatusTone.Error -> MaterialTheme.colorScheme.error
         status.tone == StatusTone.Attention -> MaterialTheme.colorScheme.tertiary
@@ -678,10 +806,7 @@ private fun ThreadRow(
     }
     val latest = thread.latestVisibleMessage
     val preview = latest?.text?.replace('\n', ' ')?.trim().orEmpty()
-    val unread = !settled &&
-        latest != null &&
-        latest.role != "user" &&
-        (thread.lastVisitedAt == null || latest.createdAt > (thread.lastVisitedAt ?: ""))
+    val unread = !settled && !snoozed && thread.isUnread
     val pullRequestNumber = thread.pullRequests.firstNotNullOfOrNull(::pullRequestNumber)
         ?: pullRequestNumber(thread.linkedPullRequest)
 
@@ -735,6 +860,17 @@ private fun ThreadRow(
                             .padding(top = 7.dp)
                             .size(6.dp)
                             .background(MaterialTheme.colorScheme.primary, CircleShape),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                if (snoozed) {
+                    Icon(
+                        Icons.Rounded.Snooze,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .padding(top = 3.dp)
+                            .size(14.dp),
+                        tint = MaterialTheme.colorScheme.secondary,
                     )
                     Spacer(Modifier.width(6.dp))
                 }
@@ -832,16 +968,17 @@ private fun ThreadRow(
                 DropdownMenuItem(
                     text = {
                         Text(
-                            if (thread.snoozedUntil != null) "Unsnooze" else "Snooze for 1 hour",
+                            if (thread.snoozedUntil != null) "Unsnooze" else "Snooze",
                         )
                     },
                     leadingIcon = { Icon(Icons.Rounded.Snooze, contentDescription = null) },
+                    enabled = thread.pendingRuntimeRequest?.status != "pending",
                     onClick = {
                         menuOpen = false
                         if (thread.snoozedUntil != null) {
                             onAction("unsnooze", "")
                         } else {
-                            onAction("snooze", Instant.now().plusSeconds(3_600).toString())
+                            onSnooze()
                         }
                     },
                 )
@@ -854,19 +991,16 @@ private fun ThreadRow(
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text("Mark as read") },
-                    leadingIcon = { Icon(Icons.Rounded.MarkEmailRead, contentDescription = null) },
-                    onClick = {
-                        menuOpen = false
-                        onAction("markRead", "")
+                    text = { Text(if (unread) "Mark as read" else "Mark as unread") },
+                    leadingIcon = {
+                        Icon(
+                            if (unread) Icons.Rounded.MarkEmailRead else Icons.Rounded.MarkEmailUnread,
+                            contentDescription = null,
+                        )
                     },
-                )
-                DropdownMenuItem(
-                    text = { Text("Mark as unread") },
-                    leadingIcon = { Icon(Icons.Rounded.MarkEmailUnread, contentDescription = null) },
                     onClick = {
                         menuOpen = false
-                        onAction("markUnread", "")
+                        onAction(if (unread) "markRead" else "markUnread", "")
                     },
                 )
                 DropdownMenuItem(
@@ -897,3 +1031,68 @@ private fun pullRequestNumber(element: kotlinx.serialization.json.JsonElement?):
 
 
 private const val SETTLED_PAGE_SIZE = 8
+
+private data class SnoozePreset(
+    val label: String,
+    val whenLabel: String,
+    val until: String,
+)
+
+/** Mirrors the official client's default snooze menu. */
+private fun snoozePresets(): List<SnoozePreset> {
+    val now = ZonedDateTime.now()
+    val zone = ZoneId.systemDefault()
+    val timeFormat = java.time.format.DateTimeFormatter.ofPattern("h:mm a")
+    val presets = mutableListOf<SnoozePreset>()
+
+    fun addAfter(minutes: Long, label: String) {
+        val wake = now.plusMinutes(minutes).truncatedTo(ChronoUnit.SECONDS)
+        presets += SnoozePreset(label, "In ${humanDuration(minutes)}", wake.toInstant().toString())
+    }
+
+    fun addAt(target: ZonedDateTime, label: String) {
+        if (!target.isAfter(now)) return
+        presets += SnoozePreset(
+            label = label,
+            whenLabel = if (target.toLocalDate() == now.toLocalDate()) {
+                target.format(timeFormat)
+            } else {
+                "${target.dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }.take(3)} " +
+                    target.format(timeFormat)
+            },
+            until = target.toInstant().toString(),
+        )
+    }
+
+    addAfter(60, "In 1 hour")
+    addAfter(180, "In 3 hours")
+    addAt(now.withHour(18).withMinute(0).withSecond(0).withNano(0), "This evening")
+    addAt(
+        now.toLocalDate().plusDays(1).atTime(9, 0).atZone(zone),
+        "Tomorrow",
+    )
+    addAt(
+        now.toLocalDate().with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY)).atTime(9, 0).atZone(zone),
+        "Next week",
+    )
+    return presets
+        .distinctBy { parseEpochMillis(it.until)?.div(60_000) }
+        .sortedBy { parseEpochMillis(it.until) ?: Long.MAX_VALUE }
+}
+
+private fun humanDuration(minutes: Long): String = when {
+    minutes < 60 -> "${minutes}m"
+    minutes % 60 == 0L -> "${minutes / 60}h"
+    else -> "${minutes / 60}h ${minutes % 60}m"
+}
+
+private fun snoozeWakeLabel(until: String?): String {
+    val wake = parseEpochMillis(until) ?: return "Snoozed"
+    val remaining = wake - System.currentTimeMillis()
+    return when {
+        remaining <= 0 -> "now"
+        remaining < 3_600_000 -> "${maxOf(1, (remaining + 59_999) / 60_000)}m"
+        remaining < 86_400_000 -> "${(remaining + 3_599_999) / 3_600_000}h"
+        else -> "${(remaining + 86_399_999) / 86_400_000}d"
+    }
+}

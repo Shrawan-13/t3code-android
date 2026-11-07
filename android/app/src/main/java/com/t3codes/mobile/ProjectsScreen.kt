@@ -103,7 +103,9 @@ fun ProjectsScreen(state: UiState, viewModel: MainViewModel) {
             items(state.projects, key = { it.id }) { project ->
                 ProjectCard(
                     project = project,
-                    threads = state.threads.filter { it.projectId == project.id },
+                    threads = state.threads.filter {
+                        it.projectId == project.id && it.isListedThread
+                    },
                     onOpen = {
                         viewModel.setProjectFilter(project.id)
                         viewModel.selectTab(AppTab.Threads)

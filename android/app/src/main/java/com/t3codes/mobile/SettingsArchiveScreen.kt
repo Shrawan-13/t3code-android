@@ -1,5 +1,6 @@
 package com.t3codes.mobile
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,13 +22,23 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.t3codes.core.ThreadShell
 
+/** Settings entry point for the archived thread list. */
 @Composable
 fun SettingsArchiveScreen(state: UiState, viewModel: MainViewModel) {
+    ArchiveScreen(state, viewModel, onBack = viewModel::closeSettingsPage)
+}
+
+/** Archived threads are reached from home as well as from Settings. */
+@Composable
+fun ArchiveScreen(state: UiState, viewModel: MainViewModel, onBack: () -> Unit) {
+    val archived = state.archivedThreads
+        .filter { it.isListedThread }
+        .sortedByDescending { it.archivedAt ?: it.updatedAt }
     SettingsScaffold(
         title = "Archive",
-        onBack = viewModel::closeSettingsPage,
+        onBack = onBack,
     ) {
-        if (state.archivedThreads.isEmpty()) {
+        if (archived.isEmpty()) {
             SettingsSection {
                 Text(
                     text = "No archived threads.",
@@ -37,9 +48,18 @@ fun SettingsArchiveScreen(state: UiState, viewModel: MainViewModel) {
                 )
             }
         } else {
-            state.archivedThreads.forEach { thread ->
+            archived.forEach { thread ->
                 SettingsSection {
-                    ArchivedThreadRow(thread, state, viewModel)
+                    ArchivedThreadRow(
+                        thread = thread,
+                        state = state,
+                        onOpen = {
+                            viewModel.closeArchive()
+                            viewModel.openThread(thread.id)
+                        },
+                        onUnarchive = { viewModel.threadAction(thread.id, "unarchive") },
+                        onDelete = { viewModel.threadAction(thread.id, "delete") },
+                    )
                 }
             }
         }
@@ -47,11 +67,23 @@ fun SettingsArchiveScreen(state: UiState, viewModel: MainViewModel) {
 }
 
 @Composable
-private fun ArchivedThreadRow(thread: ThreadShell, state: UiState, viewModel: MainViewModel) {
+private fun ArchivedThreadRow(
+    thread: ThreadShell,
+    state: UiState,
+    onOpen: () -> Unit,
+    onUnarchive: () -> Unit,
+    onDelete: () -> Unit,
+) {
     val project = state.projects.firstOrNull { it.id == thread.projectId }
+    val projectTitle = project?.title?.ifBlank { null }
+        ?: project?.workspaceRoot?.substringAfterLast('/')?.ifBlank { null }
+        ?: "Archived"
     Column {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpen)
+                .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -68,22 +100,26 @@ private fun ArchivedThreadRow(thread: ThreadShell, state: UiState, viewModel: Ma
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = project?.title?.ifBlank { null } ?: "Archived",
+                    text = "$projectTitle · ${relativeTime(thread.archivedAt ?: thread.updatedAt)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
         Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, bottom = 8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 14.dp, end = 6.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = { viewModel.threadAction(thread.id, "unarchive") }) {
+            TextButton(onClick = onUnarchive) {
                 Icon(Icons.Rounded.Unarchive, contentDescription = null)
                 Text("Restore")
             }
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = { viewModel.threadAction(thread.id, "delete") }) {
+            TextButton(onClick = onDelete) {
                 Icon(
                     Icons.Rounded.Delete,
                     contentDescription = null,

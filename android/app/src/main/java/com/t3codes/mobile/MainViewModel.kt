@@ -206,10 +206,12 @@ data class UiState(
     val showSettled: Boolean = true,
     val showArchived: Boolean = false,
     val homeFilterOpen: Boolean = false,
+    val archiveOpen: Boolean = false,
     val pullRequests: PullRequestsUi = PullRequestsUi(),
     val pullRequestDetail: PullRequestDetailUi? = null,
     val activeThreadId: String? = null,
     val thread: ThreadUi? = null,
+    val threadBackStack: List<String> = emptyList(),
     val addProjectOpen: Boolean = false,
     val projectClones: List<ProjectCloneSnapshot> = emptyList(),
     val newThreadOpen: Boolean = false,
@@ -1245,7 +1247,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ------------------------------------------------------------------ navigation
 
     fun selectTab(tab: AppTab) {
-        state = state.copy(tab = tab, homeFilterOpen = false)
+        state = state.copy(tab = tab, homeFilterOpen = false, archiveOpen = false)
         when (tab) {
             AppTab.Threads -> refresh()
             AppTab.Usage -> loadUsage(state.usage?.days ?: 30)
@@ -1707,11 +1709,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openThread(threadId: String) {
         if (state.activeThreadId == threadId) return
-        closeThread()
+        // closeThread may restore a parent from the subagent stack; keep the
+        // stack exactly as it was while swapping conversations.
+        val stack = state.threadBackStack
+        closeThread(restoreParent = false)
         val summary = state.summaryFor(threadId)
         state = state.copy(
             activeThreadId = threadId,
             thread = ThreadUi(threadId = threadId, summary = summary, loading = true),
+            threadBackStack = stack,
         )
         threadJob = viewModelScope.launch {
             var feed: ThreadFeed? = null
@@ -2084,8 +2090,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun closeThread(persist: Boolean = true) {
+    fun closeThread(persist: Boolean = true, restoreParent: Boolean = true) {
         val current = state.thread
+        if (current == null && state.activeThreadId == null) return
         val environmentId = currentEnvironmentId()
         if (persist &&
             current != null &&
@@ -2120,7 +2127,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         threadFeed = null
         threadReconcileJob?.cancel()
         threadReconcileJob = null
-        state = state.copy(activeThreadId = null, thread = null)
+        val parent = if (restoreParent) state.threadBackStack.lastOrNull() else null
+        state = state.copy(
+            activeThreadId = null,
+            thread = null,
+            threadBackStack = if (parent != null) {
+                state.threadBackStack.dropLast(1)
+            } else {
+                emptyList()
+            },
+        )
+        if (parent != null) openThread(parent)
+    }
+
+    /** Opens a delegated conversation, with back returning to its parent. */
+    fun openSubagentThread(threadId: String) {
+        val current = state.activeThreadId
+        if (current != null && current != threadId) {
+            state = state.copy(threadBackStack = state.threadBackStack + current)
+        }
+        openThread(threadId)
+    }
+
+    /** Returns from a delegated conversation to the conversation that spawned it. */
+    fun openParentThread() {
+        if (state.threadBackStack.isNotEmpty()) {
+            closeThread()
+            return
+        }
+        val parentId = state.thread?.summary?.lineage?.parentThreadId
+            ?: state.thread?.projection?.thread?.lineage?.parentThreadId
+            ?: return
+        if (parentId.isNotBlank()) openThread(parentId)
+    }
+
+    fun openArchive() {
+        state = state.copy(archiveOpen = true, homeFilterOpen = false)
+        refresh()
+    }
+
+    fun closeArchive() {
+        state = state.copy(archiveOpen = false)
     }
 
     fun retryThread() {
