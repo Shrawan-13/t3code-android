@@ -69,29 +69,29 @@ private const val MODEL_HIDDEN_KEY = "model_hidden"
 private const val MODEL_SHOW_LEGACY_KEY = "model_show_legacy"
 private const val FAVORITES_FILTER = "__favorites__"
 
-internal data class RuntimeModeOption(
+internal data class ThreadRuntimeOption(
     val value: String,
     val label: String,
     val description: String,
 )
 
-internal val runtimeModeOptions = listOf(
-    RuntimeModeOption(
+internal val threadRuntimeOptions = listOf(
+    ThreadRuntimeOption(
         value = "approval-required",
         label = "Ask first",
         description = "Approve commands and file changes",
     ),
-    RuntimeModeOption(
+    ThreadRuntimeOption(
         value = "auto-accept-edits",
         label = "Auto-accept edits",
         description = "Approve file edits, ask before commands",
     ),
-    RuntimeModeOption(
+    ThreadRuntimeOption(
         value = "auto",
         label = "Auto",
         description = "Ask only when T3 thinks it is necessary",
     ),
-    RuntimeModeOption(
+    ThreadRuntimeOption(
         value = "full-access",
         label = "Full access",
         description = "Run commands and edit files without asking",
@@ -99,7 +99,7 @@ internal val runtimeModeOptions = listOf(
 )
 
 internal fun runtimeModeLabel(value: String?): String =
-    runtimeModeOptions.firstOrNull { it.value == value }?.label ?: "Full access"
+    threadRuntimeOptions.firstOrNull { it.value == value }?.label ?: "Full access"
 
 private data class ProviderGroupUi(
     val instanceId: String,
@@ -533,7 +533,7 @@ fun ModelPickerSheet(
             title = { Text("Runtime") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    runtimeModeOptions.forEach { mode ->
+                    threadRuntimeOptions.forEach { mode ->
                         val selected = runtimeMode == mode.value
                         Surface(
                             onClick = {
