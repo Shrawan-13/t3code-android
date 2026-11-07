@@ -152,7 +152,28 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
     var agentsOpen by remember { mutableStateOf(false) }
     val runtimeMode = summary?.runtimeMode.orEmpty()
     val planMode = summary?.interactionMode == "plan"
-    val subagents = remember(projection.subagents) { projection.parsedSubagents }
+    val subagents = remember(projection.subagents, state.threads, thread.threadId) {
+        val parsed = projection.parsedSubagents
+        val knownChildren = parsed.mapNotNull { it.childThreadId }.toSet()
+        val extra = state.threads
+            .filter {
+                it.lineage.parentThreadId == thread.threadId &&
+                    it.lineage.relationshipToParent == "subagent" &&
+                    it.id !in knownChildren
+            }
+            .map { child ->
+                Subagent(
+                    id = "thread:${child.id}",
+                    threadId = thread.threadId,
+                    childThreadId = child.id,
+                    title = child.title,
+                    prompt = child.latestVisibleMessage?.text.orEmpty(),
+                    status = child.status.ifBlank { "idle" },
+                    updatedAt = child.updatedAt,
+                )
+            }
+        parsed + extra
+    }
     val subagentParentId = effective?.lineage?.parentThreadId
 
     LaunchedEffect(thread.threadId) {

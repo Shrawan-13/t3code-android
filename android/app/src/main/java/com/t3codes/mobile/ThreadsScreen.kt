@@ -140,7 +140,7 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
         )
     val working = if (state.workingShelfEnabled) chats.filter(::isWorkingThread) else emptyList()
     val activeChats = if (state.workingShelfEnabled) chats.filterNot(::isWorkingThread) else chats
-    val archived = state.archivedThreads.filter { it.isListedThread }.filter(::matches)
+    val archivedCount = state.archivedThreads.count { it.isListedThread }
     val settled = visible
         .filter { it.settledAt != null && !it.isArchived }
         .sortedWith(
@@ -160,7 +160,7 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
             },
             onRefresh = viewModel::refresh,
             onArchive = viewModel::openArchive,
-            archivedCount = state.archivedThreads.count { it.isListedThread },
+            archivedCount = archivedCount,
             onSettings = { viewModel.selectTab(AppTab.Settings) },
         )
 
@@ -488,10 +488,10 @@ fun ThreadsScreen(state: UiState, viewModel: MainViewModel) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Archived chats", style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            text = if (archived.isEmpty()) {
+                            text = if (archivedCount == 0) {
                                 "Restore archived conversations"
                             } else {
-                                "${archived.size} archived · tap to restore"
+                                "$archivedCount archived · tap to restore"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
