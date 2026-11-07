@@ -787,7 +787,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             reconnectJob = null
             reconnectAttempts = 0
         }
-        val wasLoaded = state.shellLoaded
+        val wasLive = state.connectionStatus == ConnectionStatus.Live
         // The live shell usually omits archived chats, so keep the dedicated
         // archived snapshot instead of wiping it on every live update.
         val archived = if (snapshot.archivedThreads.isNotEmpty()) {
@@ -813,7 +813,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             },
         )
         cacheShell(snapshot.copy(archivedThreads = archived), force = false)
-        if (!wasLoaded) refreshArchivedThreads()
+        if (!wasLive) refreshArchivedThreads()
     }
 
     private fun cacheShell(snapshot: ShellSnapshot, force: Boolean) {
