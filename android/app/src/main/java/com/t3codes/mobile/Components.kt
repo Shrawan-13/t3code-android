@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Description
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -784,6 +786,87 @@ fun CheckpointRow(entry: TimelineEntry) {
     }
 }
 
+@Composable
+fun SubagentCard(entry: TimelineEntry, onOpen: (() -> Unit)?) {
+    val live = entry.status in setOf("pending", "running", "waiting")
+    val failed = entry.status in setOf("failed", "cancelled", "interrupted")
+    val tone = when {
+        live -> MaterialTheme.colorScheme.primary
+        entry.status == "completed" -> MaterialTheme.colorScheme.tertiary
+        failed -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val detail = entry.output
+        .takeIf { it.isNotBlank() && !it.equals(entry.text, ignoreCase = true) }
+    Surface(
+        onClick = { onOpen?.invoke() },
+        enabled = onOpen != null,
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.SmartToy,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+            Spacer(Modifier.width(11.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = entry.text.ifBlank { "Subagent" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (entry.secondary.isNotBlank()) {
+                        Spacer(Modifier.width(7.dp))
+                        Text(
+                            text = entry.secondary,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = tone,
+                        )
+                    }
+                }
+                if (detail != null) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (onOpen != null) {
+                Spacer(Modifier.width(8.dp))
+                Icon(
+                    imageVector = Icons.Rounded.ChevronRight,
+                    contentDescription = "Open subagent",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 // ------------------------------------------------------------- compact work log
 //
 // The official client treats tool calls as quiet one-line activity. Only the
@@ -986,6 +1069,18 @@ private fun WorkEntryDetails(entry: TimelineEntry) {
             }
 
             TimelineKind.Command -> CodeDetails(entry.command, entry.output)
+
+            TimelineKind.FileSearch -> {
+                if (entry.command.isNotBlank() || entry.output.isNotBlank()) {
+                    CodeDetails(entry.command, entry.output)
+                } else if (entry.secondary.isNotBlank()) {
+                    Text(
+                        text = entry.secondary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
 
             TimelineKind.Tool -> {
                 if (entry.command.isNotBlank() || entry.output.isNotBlank()) {

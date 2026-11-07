@@ -24,7 +24,9 @@ enum class TimelineKind {
     Reasoning,
     Command,
     FileChange,
+    FileSearch,
     Tool,
+    Subagent,
     Notice,
     Checkpoint,
     Unknown,
@@ -65,6 +67,7 @@ private val workEntryKinds = setOf(
     TimelineKind.Reasoning,
     TimelineKind.Command,
     TimelineKind.FileChange,
+    TimelineKind.FileSearch,
     TimelineKind.Tool,
 )
 
@@ -101,6 +104,7 @@ fun workAction(entry: TimelineEntry): WorkAction = when (entry.kind) {
     TimelineKind.Reasoning -> WorkAction.Thought
     TimelineKind.Command -> WorkAction.Command
     TimelineKind.FileChange -> WorkAction.Edit
+    TimelineKind.FileSearch -> WorkAction.Search
     else -> {
         val name = "${entry.item.toolName} ${entry.text} ${entry.secondary}".lowercase(Locale.US)
         when {
@@ -158,6 +162,11 @@ fun workEntryLabel(entry: TimelineEntry): String = when (entry.kind) {
         val name = entry.text.substringAfterLast('/').ifBlank { entry.text.ifBlank { "File" } }
         "Edited $name"
     }
+    TimelineKind.FileSearch -> entry.text
+        .replace(Regex("\\s+(?:complete|completed)\\s*$", RegexOption.IGNORE_CASE), "")
+        .trim()
+        .ifBlank { "Searched files" }
+    TimelineKind.Subagent -> entry.text.ifBlank { "Subagent" }
     else -> entry.text
         .replace(Regex("\\s+(?:complete|completed)\\s*$", RegexOption.IGNORE_CASE), "")
         .trim()
@@ -289,6 +298,54 @@ private fun TurnItem.toEntry(index: Int): TimelineEntry? {
             streaming = streaming == true,
         )
 
+        "file_search" -> {
+            val query = pattern.ifBlank { input.asDisplayText() }.trim()
+            TimelineEntry(
+                key = entryKey,
+                kind = TimelineKind.FileSearch,
+                item = this,
+                text = title.ifBlank {
+                    if (query.isNotBlank()) "Searched $query" else "Searched files"
+                },
+                secondary = query,
+                command = query,
+                output = results.searchResults(),
+                status = status,
+                streaming = streaming == true,
+            )
+        }
+
+        "web_search" -> TimelineEntry(
+            key = entryKey,
+            kind = TimelineKind.FileSearch,
+            item = this,
+            text = title.ifBlank { "Searched the web" },
+            secondary = patterns.joinToString(", "),
+            command = patterns.joinToString(", "),
+            output = results.searchResults(),
+            status = status,
+            streaming = streaming == true,
+        )
+
+        "subagent" -> {
+            val displayTitle = title.trim()
+                .ifBlank { prompt.lineSequence().firstOrNull()?.trim().orEmpty() }
+                .ifBlank { "Subagent" }
+            val detail = progress.takeIf { it.isNotBlank() }
+                ?: result?.takeIf { it.isNotBlank() }
+                ?: prompt
+            TimelineEntry(
+                key = entryKey,
+                kind = TimelineKind.Subagent,
+                item = this,
+                text = displayTitle,
+                secondary = subagentStatusLabel(status),
+                output = detail.replace('\n', ' ').trim(),
+                status = status,
+                streaming = status in setOf("pending", "running", "waiting"),
+            )
+        }
+
         "checkpoint" -> TimelineEntry(
             key = entryKey,
             kind = TimelineKind.Checkpoint,
@@ -340,6 +397,40 @@ private fun JsonElement?.commandOutput(): String {
         return if (stderr.isNullOrBlank()) preferred else "$preferred\n$stderr"
     }
     return element.asDisplayText()
+}
+
+private fun JsonElement?.searchResults(): String {
+    val rows = this as? JsonArray ?: return ""
+    return rows.mapNotNull { row -> row as? JsonObject }
+        .mapNotNull { row ->
+            val file = (row["fileName"] as? JsonPrimitive)?.contentOrNull
+                ?: (row["url"] as? JsonPrimitive)?.contentOrNull
+            val line = (row["line"] as? JsonPrimitive)?.contentOrNull
+            val preview = (row["preview"] as? JsonPrimitive)?.contentOrNull
+                ?: (row["snippet"] as? JsonPrimitive)?.contentOrNull
+            when {
+                !file.isNullOrBlank() && !line.isNullOrBlank() && !preview.isNullOrBlank() ->
+                    "$file:$line  $preview"
+                !file.isNullOrBlank() && !line.isNullOrBlank() -> "$file:$line"
+                !file.isNullOrBlank() && !preview.isNullOrBlank() -> "$file  $preview"
+                !file.isNullOrBlank() -> file
+                !preview.isNullOrBlank() -> preview
+                else -> null
+            }
+        }
+        .joinToString("\n")
+}
+
+fun subagentStatusLabel(status: String): String = when (status) {
+    "pending" -> "Queued"
+    "running" -> "Working"
+    "waiting" -> "Waiting"
+    "completed" -> "Done"
+    "failed" -> "Failed"
+    "cancelled" -> "Cancelled"
+    "interrupted" -> "Stopped"
+    "idle" -> "Idle"
+    else -> status.replaceFirstChar { it.uppercase() }
 }
 
 // ------------------------------------------------------------------- formatting

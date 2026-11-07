@@ -55,6 +55,7 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Unarchive
@@ -174,6 +175,22 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
             }
         parsed + extra
     }
+    val timelineRows = remember(rows, subagents) {
+        rows.map { entry ->
+            if (entry.kind == TimelineKind.Subagent && entry.item.childThreadId.isNullOrBlank()) {
+                val match = subagents.firstOrNull { agent ->
+                    agent.id == entry.item.subagentId ||
+                        agent.displayTitle.equals(entry.text, ignoreCase = true)
+                }
+                match?.childThreadId
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { childId -> entry.copy(item = entry.item.copy(childThreadId = childId)) }
+                    ?: entry
+            } else {
+                entry
+            }
+        }
+    }
     val subagentParentId = effective?.lineage?.parentThreadId
 
     LaunchedEffect(thread.threadId) {
@@ -260,6 +277,23 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                                     viewModel.refreshThread()
                                 },
                             )
+                            if (subagents.isNotEmpty()) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (subagents.size == 1) "Subagent"
+                                            else "Subagents (${subagents.size})",
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.SmartToy, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        agentsOpen = true
+                                    },
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Review changes") },
                                 leadingIcon = { Icon(Icons.Rounded.Difference, contentDescription = null) },
@@ -483,21 +517,14 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                     }
                 }
             }
-            if (subagents.isNotEmpty()) {
-                SubagentBar(
-                    subagents = subagents,
-                    onOpen = { agentsOpen = true },
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                )
-            }
             Box(modifier = Modifier.fillMaxSize().weight(1f)) {
                 when {
-                    thread.loading && rows.isEmpty() -> {
+                    thread.loading && timelineRows.isEmpty() -> {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                         }
                     }
-                    thread.error != null && rows.isEmpty() -> {
+                    thread.error != null && timelineRows.isEmpty() -> {
                         Column(
                             modifier = Modifier.fillMaxSize().padding(24.dp),
                             verticalArrangement = Arrangement.Center,
@@ -506,7 +533,7 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                             ErrorBanner(message = thread.error, onRetry = viewModel::retryThread)
                         }
                     }
-                    rows.isEmpty() && !running -> {
+                    timelineRows.isEmpty() && !running -> {
                         EmptyState(
                             icon = Icons.Rounded.AutoAwesome,
                             title = "Say hello",
@@ -516,10 +543,15 @@ fun ThreadScreen(state: UiState, viewModel: MainViewModel) {
                     else -> {
                         TimelineContent(
                             thread = thread,
-                            rows = rows,
+                            rows = timelineRows,
                             running = running,
                             pullRequests = pullRequests,
                             onLoadEarlier = viewModel::loadEarlier,
+                            onOpenSubagent = { entry ->
+                                entry.item.childThreadId
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let(viewModel::openSubagentThread)
+                            },
                             onOpenPullRequest = { pullRequest ->
                                 val projectId = effective?.projectId.orEmpty()
                                 if (projectId.isBlank()) {
@@ -670,6 +702,7 @@ private fun TimelineContent(
     running: Boolean,
     pullRequests: List<PullRequestInfo>,
     onLoadEarlier: () -> Unit,
+    onOpenSubagent: (TimelineEntry) -> Unit,
     onOpenPullRequest: (PullRequestInfo) -> Unit,
 ) {
     val listState = rememberLazyListState()
@@ -755,8 +788,16 @@ private fun TimelineContent(
                         TimelineKind.Reasoning,
                         TimelineKind.Command,
                         TimelineKind.FileChange,
+                        TimelineKind.FileSearch,
                         TimelineKind.Tool,
                         -> WorkEntryRow(entry)
+                        TimelineKind.Subagent -> {
+                            val childId = entry.item.childThreadId?.takeIf { it.isNotBlank() }
+                            SubagentCard(
+                                entry = entry,
+                                onOpen = childId?.let { { onOpenSubagent(entry) } },
+                            )
+                        }
                         TimelineKind.Notice -> NoticeRow(entry)
                         TimelineKind.Checkpoint -> CheckpointRow(entry)
                         TimelineKind.Unknown -> UnknownCard(entry)
@@ -1621,69 +1662,6 @@ private fun statusToneColor(tone: StatusTone): Color = when (tone) {
 }
 
 @Composable
-private fun SubagentBar(
-    subagents: List<Subagent>,
-    onOpen: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val live = subagents.count { it.isLive }
-    val finished = subagents.count { it.isFinished }
-    val summary = when {
-        live > 0 -> "$live of ${subagents.size} agents working"
-        subagents.size == 1 -> "1 agent finished"
-        else -> "$finished of ${subagents.size} agents finished"
-    }
-    val workingTitles = subagents
-        .filter { it.isLive }
-        .map { it.displayTitle }
-        .take(2)
-        .joinToString(" · ")
-    Surface(
-        onClick = onOpen,
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Rounded.AutoAwesome,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = if (live > 0) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.width(9.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = summary,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (live > 0) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurface,
-                )
-                if (workingTitles.isNotEmpty()) {
-                    Text(
-                        text = workingTitles,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            Icon(
-                Icons.Rounded.ChevronRight,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
 private fun SubagentSheet(
     subagents: List<Subagent>,
     onOpenThread: (String) -> Unit,
@@ -1786,14 +1764,4 @@ private fun SubagentSheetRow(agent: Subagent, onOpen: (() -> Unit)?) {
     }
 }
 
-private fun subagentStatusLabel(status: String): String = when (status) {
-    "pending" -> "Queued"
-    "running" -> "Working"
-    "waiting" -> "Waiting"
-    "completed" -> "Done"
-    "failed" -> "Failed"
-    "cancelled" -> "Cancelled"
-    "interrupted" -> "Stopped"
-    "idle" -> "Idle"
-    else -> status.replaceFirstChar { it.uppercase() }
-}
+
