@@ -787,14 +787,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             reconnectJob = null
             reconnectAttempts = 0
         }
+        val wasLoaded = state.shellLoaded
+        // The live shell usually omits archived chats, so keep the dedicated
+        // archived snapshot instead of wiping it on every live update.
+        val archived = if (snapshot.archivedThreads.isNotEmpty()) {
+            snapshot.archivedThreads
+        } else {
+            state.archivedThreads.filterNot { archivedThread ->
+                snapshot.threads.any { it.id == archivedThread.id && !it.isArchived }
+            }
+        }
         val activeSummary = state.activeThreadId?.let { id ->
             snapshot.threads.firstOrNull { it.id == id }
-                ?: snapshot.archivedThreads.firstOrNull { it.id == id }
+                ?: archived.firstOrNull { it.id == id }
         }
         state = state.copy(
             projects = snapshot.projects,
             threads = snapshot.threads,
-            archivedThreads = snapshot.archivedThreads,
+            archivedThreads = archived,
             shellLoaded = true,
             connectionStatus = ConnectionStatus.Live,
             connectionNote = null,
@@ -802,7 +812,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (activeSummary != null) current.copy(summary = activeSummary) else current
             },
         )
-        cacheShell(snapshot, force = false)
+        cacheShell(snapshot.copy(archivedThreads = archived), force = false)
+        if (!wasLoaded) refreshArchivedThreads()
     }
 
     private fun cacheShell(snapshot: ShellSnapshot, force: Boolean) {
@@ -2514,6 +2525,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     "unsnooze" -> toast("Thread unsnoozed")
                     "setModel" -> toast("Model changed")
                     "markRead", "markUnread", "setRuntimeMode", "setInteractionMode" -> Unit
+                }
+                if (action == "archive" || action == "unarchive" || action == "delete") {
+                    refreshArchivedThreads()
                 }
                 refresh()
             } catch (error: CancellationException) {
